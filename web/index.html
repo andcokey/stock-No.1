@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>見通ダッシュボード</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    color-scheme: light;
+    --shell-bg:#ffffff; --shell-border:#e3e3e0; --shell-ink:#1a1a19; --shell-ink-muted:#84837e;
+    --shell-accent:#2a78d6;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:where(:not([data-theme="light"])){
+      color-scheme: dark;
+      --shell-bg:#17191c; --shell-border:#30322f; --shell-ink:#e8e6de; --shell-ink-muted:#8b897f;
+      --shell-accent:#3987e5;
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --shell-bg:#17191c; --shell-border:#30322f; --shell-ink:#e8e6de; --shell-ink-muted:#8b897f;
+    --shell-accent:#3987e5;
+  }
+  *{box-sizing:border-box;}
+  html, body{ margin:0; height:100%; }
+  body{
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+    background:var(--shell-bg); color:var(--shell-ink);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  .shell-topbar{
+    display:flex; align-items:center; gap:4px; flex:none;
+    padding:10px 18px 0; border-bottom:1px solid var(--shell-border);
+    overflow-x:auto; -webkit-overflow-scrolling:touch;
+  }
+  .shell-brand{
+    font-size:13.5px; font-weight:700; letter-spacing:.01em; color:var(--shell-ink);
+    margin-right:18px; padding-bottom:10px; flex-shrink:0;
+  }
+  .shell-tab{
+    font:inherit; font-size:13.5px; font-weight:600; color:var(--shell-ink-muted);
+    background:none; border:none; border-bottom:2px solid transparent;
+    padding:8px 16px 10px; cursor:pointer; margin-bottom:-1px; flex-shrink:0;
+    white-space:nowrap;
+  }
+  .shell-tab.active{ color:var(--shell-ink); border-bottom-color:var(--shell-accent); }
+  .shell-tab:hover{ color:var(--shell-ink); }
+  .shell-body{ flex:1; min-height:0; position:relative; }
+  .shell-frame{
+    position:absolute; inset:0; width:100%; height:100%; border:none; display:none;
+  }
+  .shell-frame.active{ display:block; }
+</style>
+</head>
+<body>
+
+<div class="shell-topbar">
+  <div class="shell-brand">見通ダッシュボード</div>
+  <button class="shell-tab active" data-tab="summary" id="tabSummary">全体サマリー</button>
+  <button class="shell-tab" data-tab="company" id="tabCompany">会社別</button>
+  <button class="shell-tab" data-tab="product" id="tabProduct">商材別</button>
+  <button class="shell-tab" data-tab="import" id="tabImport">インポート</button>
+</div>
+<div class="shell-body">
+  <iframe class="shell-frame active" id="frameSummary" src="summary.html"></iframe>
+  <iframe class="shell-frame" id="frameCompany"></iframe>
+  <iframe class="shell-frame" id="frameProduct"></iframe>
+  <iframe class="shell-frame" id="frameImport"></iframe>
+</div>
+
+<script>
+var frames = {
+  summary: document.getElementById('frameSummary'),
+  company: document.getElementById('frameCompany'),
+  product: document.getElementById('frameProduct'),
+  import: document.getElementById('frameImport'),
+};
+var tabs = {
+  summary: document.getElementById('tabSummary'),
+  company: document.getElementById('tabCompany'),
+  product: document.getElementById('tabProduct'),
+  import: document.getElementById('tabImport'),
+};
+var loaded = { summary: true, company: false, product: false, import: false };
+var srcMap = { company: 'company.html', product: 'product.html', import: 'import.html' };
+
+function activateTab(name){
+  Object.keys(tabs).forEach(function(k){
+    tabs[k].classList.toggle('active', k === name);
+    frames[k].classList.toggle('active', k === name);
+  });
+}
+
+Object.keys(tabs).forEach(function(name){
+  tabs[name].addEventListener('click', function(){
+    if (!loaded[name] && srcMap[name]) { frames[name].src = srcMap[name]; loaded[name] = true; }
+    activateTab(name);
+  });
+});
+
+window.addEventListener('message', function(ev){
+  if (!ev.data || typeof ev.data !== 'object') return;
+  if (ev.data.type === 'open-company' && ev.data.code) {
+    frames.company.src = 'company.html?code=' + encodeURIComponent(ev.data.code);
+    loaded.company = true;
+    activateTab('company');
+  } else if (ev.data.type === 'open-product' && ev.data.key) {
+    frames.product.src = 'product.html?key=' + encodeURIComponent(ev.data.key);
+    loaded.product = true;
+    activateTab('product');
+  } else if (ev.data.type === 'imported') {
+    // インポート完了後、サマリーを再読込して最新スナップショットを反映
+    frames.summary.src = 'summary.html';
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>見通ダッシュボード — 会社別</title>
+<link rel="stylesheet" href="assets/style.css" />
+<style>
+  .layout{display:flex; gap:18px; align-items:flex-start;}
+  .sidebar{width:260px; flex:none; max-height:calc(100vh - 120px); overflow-y:auto;}
+  .sidebar .search-input{width:100%; margin-bottom:10px;}
+  .sidebar-item{
+    display:block; padding:8px 10px; border-radius:7px; font-size:12.5px; color:var(--ink-2);
+    text-decoration:none; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .sidebar-item:hover{background:var(--surface);}
+  .sidebar-item.active{background:var(--accent-soft); color:var(--accent-ink); font-weight:600;}
+  .main{flex:1; min-width:0;}
+  @media (max-width:800px){ .layout{flex-direction:column;} .sidebar{width:100%; max-height:220px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="loadingScreen">読み込み中…</div>
+  <div id="appRoot" style="display:none;">
+    <header class="page-head"><h1>会社別</h1></header>
+    <div id="emptyState" class="empty-state" style="display:none;">
+      まだデータがインポートされていません。「インポート」タブから取り込んでください。
+    </div>
+    <div id="layout" class="layout" style="display:none;">
+      <div class="sidebar">
+        <input class="search-input" id="searchInput" placeholder="会社名で検索" />
+        <div id="sidebarList"></div>
+      </div>
+      <div class="main">
+        <div id="detail"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="unlock-overlay">
+  <div class="unlock-box">
+    <h3>合言葉を入力</h3>
+    <p>このダッシュボードのデータを見るには合言葉が必要です。</p>
+    <input id="unlock-input" type="password" placeholder="合言葉" />
+    <button id="unlock-btn">開く</button>
+    <div id="unlock-error"></div>
+  </div>
+</div>
+
+<script type="module">
+import { loadSnapshots } from "./assets/data-client.js";
+import { companySummary, companyTargetVariance, classifyProducts } from "./lib/aggregate.mjs";
+
+const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
+const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
+const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
+
+let forecast, target, summary, variance, quadrantsByCompany, boundaryMonth;
+
+function pickReferenceMonths(months, boundaryMonth, n = 6) {
+  return months.filter((m) => m < boundaryMonth).slice(-n);
+}
+
+function renderSidebar(filter = "") {
+  const companies = Object.values(summary).sort((a, b) => a.name.localeCompare(b.name, "ja"));
+  const q = filter.trim();
+  const filtered = q ? companies.filter((c) => c.name.includes(q) || c.code.includes(q)) : companies;
+  document.getElementById("sidebarList").innerHTML = filtered.map((c) => `
+    <a class="sidebar-item" data-code="${c.code}" href="?code=${encodeURIComponent(c.code)}">${c.name}</a>
+  `).join("") || `<div class="empty-state">該当なし</div>`;
+  document.querySelectorAll(".sidebar-item").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      selectCompany(el.dataset.code);
+      history.replaceState(null, "", "?code=" + encodeURIComponent(el.dataset.code));
+    });
+  });
+}
+
+function selectCompany(code) {
+  document.querySelectorAll(".sidebar-item").forEach((el) => el.classList.toggle("active", el.dataset.code === code));
+  const company = summary[code];
+  if (!company) {
+    document.getElementById("detail").innerHTML = `<div class="empty-state">会社が見つかりません</div>`;
+    return;
+  }
+  const months = pickReferenceMonths(forecast.months, boundaryMonth, 6);
+  const v = variance?.[code];
+
+  const rows = months.map((m) => {
+    const mv = company.monthly[m] || {};
+    const diff = v?.monthly?.[m];
+    return `<tr>
+      <td>${m}</td>
+      <td class="num">${fmtYen(mv.sales)}</td>
+      <td class="num">${fmtYen(mv.stockSales)}</td>
+      <td class="num">${fmtPct(mv.stockRatio)}</td>
+      <td class="num ${diff?.sales?.diff > 0 ? "pos" : diff?.sales?.diff < 0 ? "neg" : ""}">${diff ? fmtDiff(diff.sales.diff) : "—"}</td>
+    </tr>`;
+  }).join("");
+
+  const products = quadrantsByCompany[code] || [];
+  const productRows = products.map((p) => `
+    <tr>
+      <td>${p.productName}</td>
+      <td>${p.productType || "—"}</td>
+      <td>${p.forecast.quadrant ? `<span class="tag quad-${p.forecast.quadrant}">${p.forecast.quadrant}</span>` : "—"}</td>
+    </tr>
+  `).join("");
+
+  document.getElementById("detail").innerHTML = `
+    <h2 style="margin-top:0;">${company.name} <span class="n">(${code})</span></h2>
+    <div class="card table-scroll" style="margin-bottom:16px;">
+      <table class="datatable">
+        <thead><tr><th>月</th><th class="num">売上高（千円）</th><th class="num">ストック売上額</th><th class="num">ストック比率</th><th class="num">対目標差異（売上）</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <h3 style="font-size:13px;">傘下商材（${products.length}件）</h3>
+    <div class="card table-scroll">
+      <table class="datatable">
+        <thead><tr><th>商材名</th><th>契約型/習慣型</th><th>成長ステージ（見通）</th></tr></thead>
+        <tbody>${productRows || `<tr><td colspan="3" class="empty-state">商材データがありません</td></tr>`}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function main() {
+  ({ forecast, target } = await loadSnapshots());
+  document.getElementById("loadingScreen").style.display = "none";
+  document.getElementById("appRoot").style.display = "block";
+
+  if (!forecast) {
+    document.getElementById("emptyState").style.display = "block";
+    return;
+  }
+  document.getElementById("layout").style.display = "flex";
+
+  boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
+  summary = companySummary(forecast);
+  variance = target ? companyTargetVariance(forecast, target) : null;
+
+  const allQuadrants = classifyProducts(forecast, { boundaryMonth });
+  quadrantsByCompany = {};
+  for (const p of allQuadrants) (quadrantsByCompany[p.companyCode] ||= []).push(p);
+
+  renderSidebar();
+  document.getElementById("searchInput").addEventListener("input", (e) => renderSidebar(e.target.value));
+
+  const initialCode = new URLSearchParams(location.search).get("code") || Object.keys(summary)[0];
+  if (initialCode) selectCompany(initialCode);
+}
+
+main();
+</script>
+</body>
+</html>

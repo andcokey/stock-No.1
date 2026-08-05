@@ -1,0 +1,324 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>見通ダッシュボード — インポート</title>
+<link rel="stylesheet" href="assets/style.css" />
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="page-head"><h1>インポート</h1></header>
+
+  <div class="card" style="margin-bottom:22px;">
+    <h2>週次：見通管理ファイル（会社別、複数可）</h2>
+    <div class="dropzone" id="dropzoneForecast">
+      ここに約50社分の「見通管理」xlsxファイルをまとめてドラッグ&ドロップ<br />
+      またはクリックして選択
+      <input type="file" id="fileInputForecast" multiple accept=".xlsx,.xlsm" />
+    </div>
+    <div class="filelist" id="fileListForecast"></div>
+    <div id="forecastPreview" style="display:none; margin-top:16px;">
+      <div class="filterbar">
+        <div class="filtergroup">
+          <span class="filterlabel">基準月（この月から見通として扱う）</span>
+          <input class="search-input" id="boundaryMonthInput" style="width:110px;" />
+        </div>
+        <div class="filtergroup">
+          <span class="filterlabel">スナップショット日</span>
+          <input class="search-input" id="snapshotDateInput" style="width:130px;" />
+        </div>
+      </div>
+      <div class="kpi-row" id="forecastKpi"></div>
+      <div class="headlinks" style="margin-top:14px;">
+        <button id="saveForecastBtn">保存（GAS経由でコミット）</button>
+        <button id="downloadForecastBtn">暗号化JSONをダウンロード（手動配置用）</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>年次：目標（予算）ファイル</h2>
+    <p class="subtitle" style="margin-bottom:12px;">集計ファイルの「目標」シートを含むファイルをアップロードしてください（年1回程度の更新想定）。</p>
+    <div class="dropzone" id="dropzoneTarget">
+      ここに目標ファイルをドラッグ&ドロップ、またはクリックして選択
+      <input type="file" id="fileInputTarget" accept=".xlsx,.xlsm" />
+    </div>
+    <div class="filelist" id="fileListTarget"></div>
+    <div id="targetPreview" style="display:none; margin-top:16px;">
+      <div class="kpi-row" id="targetKpi"></div>
+      <div class="headlinks" style="margin-top:14px;">
+        <button id="saveTargetBtn">保存（GAS経由でコミット）</button>
+        <button id="downloadTargetBtn">暗号化JSONをダウンロード（手動配置用）</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:22px;">
+    <h2>接続設定</h2>
+    <div class="filtergroup">
+      <span class="filterlabel">GAS Web App URL</span>
+      <input class="search-input" id="gasUrlInput" style="width:420px;" placeholder="https://script.google.com/macros/s/xxxx/exec" />
+      <button id="saveGasUrlBtn">保存</button>
+    </div>
+    <p class="subtitle" style="margin-top:10px;">未設定の場合は「保存」は使えません。「暗号化JSONをダウンロード」で手動配置してください。</p>
+  </div>
+</div>
+
+<div id="unlock-overlay">
+  <div class="unlock-box">
+    <h3>合言葉を入力</h3>
+    <p>保存・ダウンロード時に暗号化に使う合言葉です。</p>
+    <input id="unlock-input" type="password" placeholder="合言葉" />
+    <button id="unlock-btn">OK</button>
+    <div id="unlock-error"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { parseCompanySheet, mergeParsed } from "./lib/parseCompanySheet.mjs";
+import { companySummary, classifyProducts } from "./lib/aggregate.mjs";
+import { encryptJson, getPass, setPass, askPassphrase } from "./assets/crypto-client.js";
+
+const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
+
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function toast(msg, isError = false) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.toggle("error", isError);
+  el.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove("show"), 3800);
+}
+
+async function getPassphrase() {
+  let pass = getPass();
+  if (pass) return pass;
+  pass = await askPassphrase(false);
+  setPass(pass);
+  return pass;
+}
+
+function gasUrl() {
+  return localStorage.getItem("stock_gas_url") || "";
+}
+document.getElementById("gasUrlInput").value = gasUrl();
+document.getElementById("saveGasUrlBtn").addEventListener("click", () => {
+  localStorage.setItem("stock_gas_url", document.getElementById("gasUrlInput").value.trim());
+  toast("GAS URLを保存しました");
+});
+
+function findSheet(workbook, matcher) {
+  const name = workbook.SheetNames.find(matcher);
+  return name ? workbook.Sheets[name] : null;
+}
+
+async function readWorkbook(file) {
+  const buf = await file.arrayBuffer();
+  return XLSX.read(buf, { type: "array", cellDates: true });
+}
+
+function sheetToRows(sheet) {
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+}
+
+async function saveEncrypted(obj, filename) {
+  const pass = await getPassphrase();
+  const enc = await encryptJson(obj, pass);
+  return { enc, filename };
+}
+
+function downloadJson(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function postToGas(action, payload) {
+  const url = gasUrl();
+  if (!url) throw new Error("GAS URLが未設定です");
+  const pass = await getPassphrase();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ token: pass, action, ...payload }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "保存に失敗しました");
+  return data;
+}
+
+/* ---------------- 週次：見通ファイル ---------------- */
+
+let mergedForecast = null;
+
+function setupDropzone(zoneId, inputId, onFiles) {
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  zone.addEventListener("click", () => input.click());
+  input.addEventListener("change", () => onFiles([...input.files]));
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("dragover");
+    onFiles([...e.dataTransfer.files]);
+  });
+}
+
+setupDropzone("dropzoneForecast", "fileInputForecast", async (files) => {
+  const listEl = document.getElementById("fileListForecast");
+  listEl.innerHTML = "";
+  const parsedList = [];
+  for (const file of files) {
+    const row = document.createElement("div");
+    listEl.appendChild(row);
+    try {
+      const wb = await readWorkbook(file);
+      const sheet = findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計");
+      if (!sheet) throw new Error("「商材集計」シートが見つかりません");
+      const parsed = parseCompanySheet(sheetToRows(sheet));
+      const codes = Object.keys(parsed.companies);
+      parsedList.push(parsed);
+      row.className = "ok";
+      row.textContent = `✓ ${file.name} → ${codes.map((c) => parsed.companies[c].name).join(", ")}`;
+    } catch (err) {
+      row.className = "err";
+      row.textContent = `✗ ${file.name}: ${err.message}`;
+    }
+  }
+  if (!parsedList.length) { toast("解析できるファイルがありませんでした", true); return; }
+
+  mergedForecast = mergeParsed(parsedList);
+  document.getElementById("boundaryMonthInput").value = currentMonthKey();
+  document.getElementById("snapshotDateInput").value = todayIso();
+  renderForecastPreview();
+});
+
+function renderForecastPreview() {
+  const boundaryMonth = document.getElementById("boundaryMonthInput").value || currentMonthKey();
+  const summary = companySummary(mergedForecast);
+  const companies = Object.values(summary);
+  const refMonth = mergedForecast.months.filter((m) => m < boundaryMonth).at(-1) || mergedForecast.months.at(-1);
+  let totalSales = 0, totalStock = 0;
+  for (const c of companies) {
+    const m = c.monthly[refMonth] || {};
+    totalSales += m.sales || 0;
+    totalStock += m.stockSales || 0;
+  }
+  const quadrants = classifyProducts(mergedForecast, { boundaryMonth });
+
+  document.getElementById("forecastKpi").innerHTML = `
+    <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companies.length}</div></div>
+    <div class="card"><div class="kpi-label">商材数</div><div class="kpi-value">${quadrants.length}</div></div>
+    <div class="card"><div class="kpi-label">${refMonth} 売上高（千円）</div><div class="kpi-value">${fmtYen(totalSales)}</div></div>
+    <div class="card"><div class="kpi-label">${refMonth} ストック売上額</div><div class="kpi-value">${fmtYen(totalStock)}</div></div>
+  `;
+  document.getElementById("forecastPreview").style.display = "block";
+}
+document.getElementById("boundaryMonthInput").addEventListener("change", () => mergedForecast && renderForecastPreview());
+
+function buildForecastSnapshot() {
+  return {
+    snapshotDate: document.getElementById("snapshotDateInput").value || todayIso(),
+    boundaryMonth: document.getElementById("boundaryMonthInput").value || currentMonthKey(),
+    months: mergedForecast.months,
+    companies: mergedForecast.companies,
+  };
+}
+
+document.getElementById("saveForecastBtn").addEventListener("click", async () => {
+  if (!mergedForecast) return;
+  try {
+    const snapshot = buildForecastSnapshot();
+    const { enc } = await saveEncrypted(snapshot, "forecast-latest.enc.json");
+    await postToGas("saveForecast", { snapshotDate: snapshot.snapshotDate, data: enc });
+    toast("保存しました（GitHubへコミット済み。数分後にサイトへ反映されます）");
+    parent.postMessage({ type: "imported" }, "*");
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+document.getElementById("downloadForecastBtn").addEventListener("click", async () => {
+  if (!mergedForecast) return;
+  const snapshot = buildForecastSnapshot();
+  const { enc } = await saveEncrypted(snapshot, "forecast-latest.enc.json");
+  downloadJson(enc, "forecast-latest.enc.json");
+  toast("ダウンロードしました。sync/forecast-latest.enc.json に配置してcommit&pushしてください");
+});
+
+/* ---------------- 年次：目標ファイル ---------------- */
+
+let mergedTarget = null;
+
+setupDropzone("dropzoneTarget", "fileInputTarget", async (files) => {
+  const listEl = document.getElementById("fileListTarget");
+  listEl.innerHTML = "";
+  const file = files[0];
+  if (!file) return;
+  const row = document.createElement("div");
+  listEl.appendChild(row);
+  try {
+    const wb = await readWorkbook(file);
+    const sheet = findSheet(wb, (n) => n.trim() === "目標") || findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計");
+    if (!sheet) throw new Error("「目標」シートが見つかりません");
+    mergedTarget = parseCompanySheet(sheetToRows(sheet));
+    row.className = "ok";
+    row.textContent = `✓ ${file.name} → ${Object.keys(mergedTarget.companies).length}社分の目標データを検出`;
+    renderTargetPreview();
+  } catch (err) {
+    row.className = "err";
+    row.textContent = `✗ ${file.name}: ${err.message}`;
+  }
+});
+
+function renderTargetPreview() {
+  const summary = companySummary(mergedTarget);
+  const companies = Object.values(summary);
+  document.getElementById("targetKpi").innerHTML = `
+    <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companies.length}</div></div>
+    <div class="card"><div class="kpi-label">対象月数</div><div class="kpi-value">${mergedTarget.months.length}</div></div>
+  `;
+  document.getElementById("targetPreview").style.display = "block";
+}
+
+function buildTargetSnapshot() {
+  return { snapshotDate: todayIso(), months: mergedTarget.months, companies: mergedTarget.companies };
+}
+
+document.getElementById("saveTargetBtn").addEventListener("click", async () => {
+  if (!mergedTarget) return;
+  try {
+    const snapshot = buildTargetSnapshot();
+    const { enc } = await saveEncrypted(snapshot, "target-latest.enc.json");
+    await postToGas("saveTarget", { snapshotDate: snapshot.snapshotDate, data: enc });
+    toast("目標データを保存しました");
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+document.getElementById("downloadTargetBtn").addEventListener("click", async () => {
+  if (!mergedTarget) return;
+  const snapshot = buildTargetSnapshot();
+  const { enc } = await saveEncrypted(snapshot, "target-latest.enc.json");
+  downloadJson(enc, "target-latest.enc.json");
+  toast("ダウンロードしました。sync/target-latest.enc.json に配置してcommit&pushしてください");
+});
+</script>
+</body>
+</html>

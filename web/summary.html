@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>見通ダッシュボード — 全体サマリー</title>
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div id="loadingScreen">読み込み中…</div>
+  <div id="errorScreen">
+    <div>読み込みに失敗しました。</div>
+    <button onclick="location.reload()">再読込</button>
+  </div>
+
+  <div id="appRoot">
+    <header class="page-head">
+      <div>
+        <h1>全体サマリー</h1>
+        <div class="subtitle" id="snapshotInfo"></div>
+      </div>
+    </header>
+
+    <div id="emptyState" class="empty-state" style="display:none;">
+      まだデータがインポートされていません。<br />
+      「インポート」タブから週次の見通ファイルをドラッグ&ドロップしてください。
+    </div>
+
+    <div id="content" style="display:none;">
+      <div class="kpi-row" id="kpiRow"></div>
+
+      <div class="mid-row">
+        <div class="card">
+          <h2>会社別ランキング（売上高） <span class="n" id="rankMonthLabel"></span></h2>
+          <div class="ranklist" id="rankList"></div>
+        </div>
+        <div class="card">
+          <h2>商材ポートフォリオ（成長ステージ・見通） <span class="n" id="quadCount"></span></h2>
+          <div class="quadgrid" id="quadGrid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="unlock-overlay">
+  <div class="unlock-box">
+    <h3>合言葉を入力</h3>
+    <p>このダッシュボードのデータを見るには合言葉が必要です。</p>
+    <input id="unlock-input" type="password" placeholder="合言葉" />
+    <button id="unlock-btn">開く</button>
+    <div id="unlock-error"></div>
+  </div>
+</div>
+
+<script type="module">
+import { loadSnapshots } from "./assets/data-client.js";
+import { companySummary, classifyProducts, QUADRANT_MAP } from "./lib/aggregate.mjs";
+
+const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
+const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
+
+function pickReferenceMonth(months, boundaryMonth) {
+  const actual = months.filter((m) => m < boundaryMonth);
+  return actual.at(-1) || months.at(-1);
+}
+
+async function main() {
+  let forecast;
+  try {
+    ({ forecast } = await loadSnapshots());
+  } catch (e) {
+    document.getElementById("loadingScreen").style.display = "none";
+    document.getElementById("errorScreen").style.display = "block";
+    return;
+  }
+  document.getElementById("loadingScreen").style.display = "none";
+
+  if (!forecast) {
+    document.getElementById("emptyState").style.display = "block";
+    document.getElementById("appRoot").style.display = "block";
+    return;
+  }
+
+  const boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
+  const refMonth = pickReferenceMonth(forecast.months, boundaryMonth);
+  document.getElementById("snapshotInfo").textContent =
+    `スナップショット日: ${forecast.snapshotDate || "-"} ／ 表示基準月: ${refMonth}`;
+  document.getElementById("rankMonthLabel").textContent = `(${refMonth})`;
+
+  const summary = companySummary(forecast);
+  const companyList = Object.values(summary);
+
+  let totalSales = 0, totalStock = 0;
+  for (const c of companyList) {
+    const m = c.monthly[refMonth] || {};
+    totalSales += m.sales || 0;
+    totalStock += m.stockSales || 0;
+  }
+  const stockRatio = totalSales ? totalStock / totalSales : null;
+
+  document.getElementById("kpiRow").innerHTML = `
+    <div class="card"><div class="kpi-label">売上高（千円）</div><div class="kpi-value">${fmtYen(totalSales)}</div></div>
+    <div class="card"><div class="kpi-label">ストック売上額（千円）</div><div class="kpi-value">${fmtYen(totalStock)}</div></div>
+    <div class="card"><div class="kpi-label">ストック比率</div><div class="kpi-value">${fmtPct(stockRatio)}</div></div>
+    <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companyList.length}<small>社</small></div></div>
+  `;
+
+  const ranked = companyList
+    .map((c) => ({ ...c, sales: c.monthly[refMonth]?.sales || 0 }))
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 12);
+  const maxSales = ranked[0]?.sales || 1;
+  document.getElementById("rankList").innerHTML = ranked.map((c, i) => `
+    <a class="rankrow" href="#" data-code="${c.code}">
+      <span class="idx">${i + 1}</span>
+      <span class="name">${c.name}</span>
+      <span class="bartrack"><span class="barfill" style="width:${(c.sales / maxSales * 100).toFixed(1)}%"></span></span>
+      <span class="amt">${fmtYen(c.sales)}</span>
+    </a>
+  `).join("") || `<div class="empty-state">データがありません</div>`;
+
+  document.querySelectorAll(".rankrow").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      parent.postMessage({ type: "open-company", code: el.dataset.code }, "*");
+    });
+  });
+
+  const quadrants = classifyProducts(forecast, { boundaryMonth });
+  const counts = { 順調成長: 0, 積上純増: 0, ジレンマ: 0, 要改善: 0 };
+  for (const p of quadrants) if (p.forecast.quadrant) counts[p.forecast.quadrant]++;
+  const classified = Object.values(counts).reduce((a, b) => a + b, 0);
+  document.getElementById("quadCount").textContent = `(${classified}/${quadrants.length}商材を分類)`;
+  const cellClass = { 順調成長: "growth", 積上純増: "", ジレンマ: "dilemma", 要改善: "improve" };
+  document.getElementById("quadGrid").innerHTML = Object.entries(counts).map(([name, n]) => `
+    <div class="quadcell ${cellClass[name]}">
+      <div class="qname">${name}</div>
+      <div class="qcount">${n}<small style="font-size:12px;color:var(--ink-muted);">商材</small></div>
+    </div>
+  `).join("");
+
+  document.getElementById("content").style.display = "block";
+  document.getElementById("appRoot").style.display = "block";
+}
+
+main();
+</script>
+</body>
+</html>

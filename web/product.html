@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>見通ダッシュボード — 商材別</title>
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div id="loadingScreen">読み込み中…</div>
+  <div id="appRoot" style="display:none;">
+    <header class="page-head"><h1>商材別</h1></header>
+    <div id="emptyState" class="empty-state" style="display:none;">
+      まだデータがインポートされていません。「インポート」タブから取り込んでください。
+    </div>
+    <div id="content" style="display:none;">
+      <div class="filterbar">
+        <input class="search-input" id="searchInput" placeholder="会社名・商材名で検索" />
+        <div class="filtergroup" id="quadChips"></div>
+        <span class="resetlink" id="resetLink">絞り込みを解除</span>
+      </div>
+      <div class="card table-scroll">
+        <table class="datatable">
+          <thead>
+            <tr>
+              <th>会社名</th><th>商材名</th><th>契約型/習慣型</th>
+              <th>成長ステージ（実績）</th><th>成長ステージ（見通）</th>
+              <th class="num">対目標差異（当月・売上）</th>
+              <th class="num">対目標差異（当月・ストック）</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="unlock-overlay">
+  <div class="unlock-box">
+    <h3>合言葉を入力</h3>
+    <p>このダッシュボードのデータを見るには合言葉が必要です。</p>
+    <input id="unlock-input" type="password" placeholder="合言葉" />
+    <button id="unlock-btn">開く</button>
+    <div id="unlock-error"></div>
+  </div>
+</div>
+
+<script type="module">
+import { loadSnapshots } from "./assets/data-client.js";
+import { classifyProducts, productTargetVariance, METRIC } from "./lib/aggregate.mjs";
+
+const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
+const QUADS = ["順調成長", "積上純増", "ジレンマ", "要改善"];
+
+let rows = [];
+let activeQuad = null;
+
+function render(filterText = "") {
+  const q = filterText.trim();
+  const filtered = rows.filter((r) => {
+    if (activeQuad && r.forecast.quadrant !== activeQuad) return false;
+    if (!q) return true;
+    return r.companyName.includes(q) || r.productName.includes(q);
+  });
+  document.getElementById("tbody").innerHTML = filtered.map((r) => `
+    <tr>
+      <td>${r.companyName}</td>
+      <td>${r.productName}</td>
+      <td>${r.productType || "—"}</td>
+      <td>${r.actual.quadrant ? `<span class="tag quad-${r.actual.quadrant}">${r.actual.quadrant}</span>` : "—"}</td>
+      <td>${r.forecast.quadrant ? `<span class="tag quad-${r.forecast.quadrant}">${r.forecast.quadrant}</span>` : "—"}</td>
+      <td class="num ${cls(r.salesDiff)}">${fmtDiff(r.salesDiff)}</td>
+      <td class="num ${cls(r.stockDiff)}">${fmtDiff(r.stockDiff)}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="7" class="empty-state">該当する商材がありません</td></tr>`;
+}
+function cls(v) { return v > 0 ? "pos" : v < 0 ? "neg" : ""; }
+
+function renderChips() {
+  document.getElementById("quadChips").innerHTML = QUADS.map((qd) => `
+    <span class="chip${activeQuad === qd ? " active" : ""}" data-q="${qd}">${qd}</span>
+  `).join("");
+  document.querySelectorAll(".chip").forEach((el) => {
+    el.addEventListener("click", () => {
+      activeQuad = activeQuad === el.dataset.q ? null : el.dataset.q;
+      renderChips();
+      render(document.getElementById("searchInput").value);
+    });
+  });
+}
+
+async function main() {
+  const { forecast, target } = await loadSnapshots();
+  document.getElementById("loadingScreen").style.display = "none";
+  document.getElementById("appRoot").style.display = "block";
+  if (!forecast) {
+    document.getElementById("emptyState").style.display = "block";
+    return;
+  }
+  document.getElementById("content").style.display = "block";
+
+  const boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
+  const refMonth = forecast.months.filter((m) => m < boundaryMonth).at(-1) || forecast.months.at(-1);
+
+  const quadrants = classifyProducts(forecast, { boundaryMonth });
+  let salesVarianceByKey = {}, stockVarianceByKey = {};
+  if (target) {
+    for (const v of productTargetVariance(forecast, target, METRIC.SALES)) {
+      salesVarianceByKey[`${v.companyCode}:${v.productNo}`] = v.monthly[refMonth];
+    }
+    for (const v of productTargetVariance(forecast, target, METRIC.STOCK_SALES)) {
+      stockVarianceByKey[`${v.companyCode}:${v.productNo}`] = v.monthly[refMonth];
+    }
+  }
+
+  rows = quadrants.map((r) => {
+    const key = `${r.companyCode}:${r.productNo}`;
+    return { ...r, salesDiff: salesVarianceByKey[key] ?? null, stockDiff: stockVarianceByKey[key] ?? null };
+  });
+
+  renderChips();
+  render();
+  document.getElementById("searchInput").addEventListener("input", (e) => render(e.target.value));
+  document.getElementById("resetLink").addEventListener("click", () => {
+    activeQuad = null;
+    document.getElementById("searchInput").value = "";
+    renderChips();
+    render();
+  });
+}
+
+main();
+</script>
+</body>
+</html>
