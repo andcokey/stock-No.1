@@ -47,10 +47,16 @@
 
   <div class="card">
     <h2>年次：目標（予算）ファイル</h2>
-    <p class="subtitle" style="margin-bottom:12px;">集計ファイルの「目標」シートを含むファイルをアップロードしてください（年1回程度の更新想定）。</p>
+    <p class="subtitle" style="margin-bottom:12px;">集計ファイルの「目標」シートを含むファイルをアップロードしてください（年1回程度の更新想定）。会社別ファイル（複数可）でも構いません。</p>
+    <p class="subtitle" id="lastImportInfoTarget">現在のデータの最終インポート日を確認中…</p>
     <div class="dropzone" id="dropzoneTarget">
-      ここに目標ファイルをドラッグ&ドロップ、またはクリックして選択
-      <input type="file" id="fileInputTarget" accept=".xlsx,.xlsm" />
+      ここに目標ファイルをドラッグ&ドロップ（会社別ファイルの場合は複数可）、またはクリックして選択
+      <input type="file" id="fileInputTarget" multiple accept=".xlsx,.xlsm" />
+    </div>
+    <div class="dropzone" id="dropzoneTargetZip" style="margin-top:10px;">
+      またはZIPファイルをまとめてドラッグ&ドロップ（会社フォルダごとに目標ファイルが入った構造）<br />
+      クリックして選択
+      <input type="file" id="fileInputTargetZip" multiple accept=".zip" />
     </div>
     <div class="filelist" id="fileListTarget"></div>
     <div id="targetPreview" style="display:none; margin-top:16px;">
@@ -130,14 +136,19 @@ async function getPassphrase() {
 }
 
 (async () => {
-  const infoEl = document.getElementById("lastImportInfo");
+  const forecastInfoEl = document.getElementById("lastImportInfo");
+  const targetInfoEl = document.getElementById("lastImportInfoTarget");
   try {
-    const { forecast } = await loadSnapshots();
-    infoEl.textContent = forecast
+    const { forecast, target } = await loadSnapshots();
+    forecastInfoEl.textContent = forecast
       ? `現在のデータの最終インポート日: ${forecast.snapshotDate || "-"}`
       : "現在のデータの最終インポート日: まだインポートされていません";
+    targetInfoEl.textContent = target
+      ? `現在のデータの最終インポート日: ${target.snapshotDate || "-"}`
+      : "現在のデータの最終インポート日: まだインポートされていません";
   } catch {
-    infoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
+    forecastInfoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
+    targetInfoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
   }
 })();
 
@@ -155,13 +166,39 @@ function findSheet(workbook, matcher) {
   return name ? workbook.Sheets[name] : null;
 }
 
-async function readWorkbook(file) {
-  const buf = await file.arrayBuffer();
-  return XLSX.read(buf, { type: "array", cellDates: true });
-}
-
 function sheetToRows(sheet) {
   return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+}
+
+/**
+ * entries: [{ name: string, getBuffer: () => Promise<ArrayBuffer> }]
+ * ドラッグ&ドロップの生ファイルと、ZIP内から選択されたエントリの両方をこの形に揃えて渡す。
+ * 複数エントリを解析し、mergeParsed()で1つにまとめてonMergedへ渡す（1件だけでも同じ経路を通す）。
+ */
+async function importXlsxEntries(entries, { listElId, sheetMatcher, onMerged }) {
+  const listEl = document.getElementById(listElId);
+  listEl.innerHTML = "";
+  const parsedList = [];
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    listEl.appendChild(row);
+    try {
+      const buf = await entry.getBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const sheet = sheetMatcher(wb);
+      if (!sheet) throw new Error("対象のシートが見つかりません");
+      const parsed = parseCompanySheet(sheetToRows(sheet));
+      const codes = Object.keys(parsed.companies);
+      parsedList.push(parsed);
+      row.className = "ok";
+      row.textContent = `✓ ${entry.name} → ${codes.map((c) => parsed.companies[c].name).join(", ")}`;
+    } catch (err) {
+      row.className = "err";
+      row.textContent = `✗ ${entry.name}: ${err.message}`;
+    }
+  }
+  if (!parsedList.length) { toast("解析できるファイルがありませんでした", true); return; }
+  onMerged(mergeParsed(parsedList));
 }
 
 async function saveEncrypted(obj, filename) {
@@ -211,38 +248,17 @@ function setupDropzone(zoneId, inputId, onFiles) {
   });
 }
 
-/**
- * entries: [{ name: string, getBuffer: () => Promise<ArrayBuffer> }]
- * ドラッグ&ドロップの生ファイルと、ZIP内から選択されたエントリの両方をこの形に揃えて渡す。
- */
 async function importForecastEntries(entries) {
-  const listEl = document.getElementById("fileListForecast");
-  listEl.innerHTML = "";
-  const parsedList = [];
-  for (const entry of entries) {
-    const row = document.createElement("div");
-    listEl.appendChild(row);
-    try {
-      const buf = await entry.getBuffer();
-      const wb = XLSX.read(buf, { type: "array", cellDates: true });
-      const sheet = findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計");
-      if (!sheet) throw new Error("「商材集計」シートが見つかりません");
-      const parsed = parseCompanySheet(sheetToRows(sheet));
-      const codes = Object.keys(parsed.companies);
-      parsedList.push(parsed);
-      row.className = "ok";
-      row.textContent = `✓ ${entry.name} → ${codes.map((c) => parsed.companies[c].name).join(", ")}`;
-    } catch (err) {
-      row.className = "err";
-      row.textContent = `✗ ${entry.name}: ${err.message}`;
-    }
-  }
-  if (!parsedList.length) { toast("解析できるファイルがありませんでした", true); return; }
-
-  mergedForecast = mergeParsed(parsedList);
-  document.getElementById("boundaryMonthInput").value = currentMonthKey();
-  document.getElementById("snapshotDateInput").value = todayIso();
-  renderForecastPreview();
+  await importXlsxEntries(entries, {
+    listElId: "fileListForecast",
+    sheetMatcher: (wb) => findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計"),
+    onMerged: (merged) => {
+      mergedForecast = merged;
+      document.getElementById("boundaryMonthInput").value = currentMonthKey();
+      document.getElementById("snapshotDateInput").value = todayIso();
+      renderForecastPreview();
+    },
+  });
 }
 
 setupDropzone("dropzoneForecast", "fileInputForecast", (files) => {
@@ -348,10 +364,11 @@ function openZipSelectOverlay(ambiguousGroups) {
   });
 }
 
-setupDropzone("dropzoneForecastZip", "fileInputForecastZip", async (files) => {
+/** ZIPドロップ共通処理: 候補収集→（必要なら）選択モーダル→importFnへ引き渡す。 */
+async function handleZipDrop(files, importFn) {
   if (!files.length) return;
   const groups = await collectZipCandidates(files);
-  if (!groups.size) { toast("ZIP内に見通管理ファイル（xlsx/xlsm）が見つかりませんでした", true); return; }
+  if (!groups.size) { toast("ZIP内に対象ファイル（xlsx/xlsm）が見つかりませんでした", true); return; }
 
   const ambiguous = new Map([...groups].filter(([, g]) => g.candidates.length > 1));
   let selections;
@@ -366,8 +383,10 @@ setupDropzone("dropzoneForecastZip", "fileInputForecastZip", async (files) => {
     const chosen = group.candidates.length === 1 ? group.candidates[0] : selections.get(groupKey);
     return { name: `${group.label}/${chosen.name}`, getBuffer: chosen.getBuffer };
   });
-  await importForecastEntries(entries);
-});
+  await importFn(entries);
+}
+
+setupDropzone("dropzoneForecastZip", "fileInputForecastZip", (files) => handleZipDrop(files, importForecastEntries));
 
 function renderForecastPreview() {
   const boundaryMonth = document.getElementById("boundaryMonthInput").value || currentMonthKey();
@@ -426,26 +445,22 @@ document.getElementById("downloadForecastBtn").addEventListener("click", async (
 
 let mergedTarget = null;
 
-setupDropzone("dropzoneTarget", "fileInputTarget", async (files) => {
-  const listEl = document.getElementById("fileListTarget");
-  listEl.innerHTML = "";
-  const file = files[0];
-  if (!file) return;
-  const row = document.createElement("div");
-  listEl.appendChild(row);
-  try {
-    const wb = await readWorkbook(file);
-    const sheet = findSheet(wb, (n) => n.trim() === "目標") || findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計");
-    if (!sheet) throw new Error("「目標」シートが見つかりません");
-    mergedTarget = parseCompanySheet(sheetToRows(sheet));
-    row.className = "ok";
-    row.textContent = `✓ ${file.name} → ${Object.keys(mergedTarget.companies).length}社分の目標データを検出`;
-    renderTargetPreview();
-  } catch (err) {
-    row.className = "err";
-    row.textContent = `✗ ${file.name}: ${err.message}`;
-  }
+async function importTargetEntries(entries) {
+  await importXlsxEntries(entries, {
+    listElId: "fileListTarget",
+    sheetMatcher: (wb) => findSheet(wb, (n) => n.trim() === "目標") || findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計"),
+    onMerged: (merged) => {
+      mergedTarget = merged;
+      renderTargetPreview();
+    },
+  });
+}
+
+setupDropzone("dropzoneTarget", "fileInputTarget", (files) => {
+  importTargetEntries(files.map((file) => ({ name: file.name, getBuffer: () => file.arrayBuffer() })));
 });
+
+setupDropzone("dropzoneTargetZip", "fileInputTargetZip", (files) => handleZipDrop(files, importTargetEntries));
 
 function renderTargetPreview() {
   const summary = companySummary(mergedTarget);
