@@ -143,6 +143,30 @@ footer.note{margin-top:30px; font-size:11.5px; color:var(--ink-muted); line-heig
 .unlock-box button{margin-top:10px; width:100%; font:inherit; font-weight:600; padding:8px 10px; border-radius:7px; border:none; background:var(--accent); color:#fff; cursor:pointer;}
 #unlock-error{color:var(--bad); font-size:11.5px; margin-top:8px; min-height:14px;}
 
+/* --- ZIPインポート：候補ファイル選択オーバーレイ --- */
+#zip-select-overlay{
+  position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.45); z-index:1000; padding:24px;
+}
+#zip-select-overlay.open{display:flex;}
+.zip-select-box{
+  background:var(--surface-raised); border:1px solid var(--border); border-radius:12px;
+  padding:24px 26px; width:100%; max-width:640px; max-height:82vh; display:flex; flex-direction:column;
+}
+.zip-select-box h3{margin:0 0 6px; font-size:15px;}
+.zip-select-box p{margin:0 0 14px; font-size:12px; color:var(--ink-muted);}
+#zip-select-groups{overflow-y:auto; display:flex; flex-direction:column; gap:14px; padding-right:4px;}
+.zip-select-group{border:1px solid var(--border); border-radius:8px; padding:10px 12px;}
+.zip-select-group .group-name{font-size:13px; font-weight:700; margin-bottom:8px;}
+.zip-select-group label.candidate{
+  display:flex; align-items:baseline; gap:8px; font-size:12.5px; padding:4px 0; cursor:pointer;
+}
+.zip-select-group label.candidate .cand-name{color:var(--ink-2); word-break:break-all;}
+.zip-select-group label.candidate .cand-date{color:var(--ink-muted); font-size:11.5px; white-space:nowrap;}
+.zip-select-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:16px;}
+.zip-select-actions button{font:inherit; font-weight:600; padding:8px 16px; border-radius:7px; border:none; background:var(--accent); color:#fff; cursor:pointer;}
+.zip-select-actions button.secondary{background:var(--surface); color:var(--ink-2); border:1px solid var(--border);}
+
 /* --- インポート用ドロップゾーン --- */
 .dropzone{
   border:2px dashed var(--border); border-radius:12px; padding:36px 20px; text-align:center;

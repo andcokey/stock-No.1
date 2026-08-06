@@ -5,6 +5,7 @@
 <title>見通ダッシュボード — インポート</title>
 <link rel="stylesheet" href="assets/style.css" />
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -12,10 +13,17 @@
 
   <div class="card" style="margin-bottom:22px;">
     <h2>週次：見通管理ファイル（会社別、複数可）</h2>
+    <p class="subtitle" id="lastImportInfo">現在のデータの最終インポート日を確認中…</p>
     <div class="dropzone" id="dropzoneForecast">
       ここに約50社分の「見通管理」xlsxファイルをまとめてドラッグ&ドロップ<br />
       またはクリックして選択
       <input type="file" id="fileInputForecast" multiple accept=".xlsx,.xlsm" />
+    </div>
+    <div class="dropzone" id="dropzoneForecastZip" style="margin-top:10px;">
+      またはZIPファイルをまとめてドラッグ&ドロップ（会社フォルダごとに見通管理ファイルが入った構造）<br />
+      例: 002_見通管理.zip 配下に「10001_会社名／101_見通管理_….xlsx」<br />
+      クリックして選択
+      <input type="file" id="fileInputForecastZip" multiple accept=".zip" />
     </div>
     <div class="filelist" id="fileListForecast"></div>
     <div id="forecastPreview" style="display:none; margin-top:16px;">
@@ -74,12 +82,24 @@
     <div id="unlock-error"></div>
   </div>
 </div>
+<div id="zip-select-overlay">
+  <div class="zip-select-box">
+    <h3>取り込むファイルを選択</h3>
+    <p>1つの会社フォルダに複数のファイルが見つかりました。取り込むファイルを選んでください（最終更新日が新しい方を初期選択しています）。</p>
+    <div id="zip-select-groups"></div>
+    <div class="zip-select-actions">
+      <button id="zip-select-cancel" class="secondary">キャンセル</button>
+      <button id="zip-select-confirm">この内容で取り込む</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script type="module">
 import { parseCompanySheet, mergeParsed } from "./lib/parseCompanySheet.mjs";
 import { companySummary, classifyProducts } from "./lib/aggregate.mjs";
 import { encryptJson, getPass, setPass, askPassphrase } from "./assets/crypto-client.js";
+import { loadSnapshots } from "./assets/data-client.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
 
@@ -108,6 +128,18 @@ async function getPassphrase() {
   setPass(pass);
   return pass;
 }
+
+(async () => {
+  const infoEl = document.getElementById("lastImportInfo");
+  try {
+    const { forecast } = await loadSnapshots();
+    infoEl.textContent = forecast
+      ? `現在のデータの最終インポート日: ${forecast.snapshotDate || "-"}`
+      : "現在のデータの最終インポート日: まだインポートされていません";
+  } catch {
+    infoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
+  }
+})();
 
 function gasUrl() {
   return localStorage.getItem("stock_gas_url") || "";
@@ -179,25 +211,30 @@ function setupDropzone(zoneId, inputId, onFiles) {
   });
 }
 
-setupDropzone("dropzoneForecast", "fileInputForecast", async (files) => {
+/**
+ * entries: [{ name: string, getBuffer: () => Promise<ArrayBuffer> }]
+ * ドラッグ&ドロップの生ファイルと、ZIP内から選択されたエントリの両方をこの形に揃えて渡す。
+ */
+async function importForecastEntries(entries) {
   const listEl = document.getElementById("fileListForecast");
   listEl.innerHTML = "";
   const parsedList = [];
-  for (const file of files) {
+  for (const entry of entries) {
     const row = document.createElement("div");
     listEl.appendChild(row);
     try {
-      const wb = await readWorkbook(file);
+      const buf = await entry.getBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
       const sheet = findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計");
       if (!sheet) throw new Error("「商材集計」シートが見つかりません");
       const parsed = parseCompanySheet(sheetToRows(sheet));
       const codes = Object.keys(parsed.companies);
       parsedList.push(parsed);
       row.className = "ok";
-      row.textContent = `✓ ${file.name} → ${codes.map((c) => parsed.companies[c].name).join(", ")}`;
+      row.textContent = `✓ ${entry.name} → ${codes.map((c) => parsed.companies[c].name).join(", ")}`;
     } catch (err) {
       row.className = "err";
-      row.textContent = `✗ ${file.name}: ${err.message}`;
+      row.textContent = `✗ ${entry.name}: ${err.message}`;
     }
   }
   if (!parsedList.length) { toast("解析できるファイルがありませんでした", true); return; }
@@ -206,6 +243,130 @@ setupDropzone("dropzoneForecast", "fileInputForecast", async (files) => {
   document.getElementById("boundaryMonthInput").value = currentMonthKey();
   document.getElementById("snapshotDateInput").value = todayIso();
   renderForecastPreview();
+}
+
+setupDropzone("dropzoneForecast", "fileInputForecast", (files) => {
+  importForecastEntries(files.map((file) => ({ name: file.name, getBuffer: () => file.arrayBuffer() })));
+});
+
+/* ---------------- 週次：ZIP（会社フォルダ構造）から取り込み ---------------- */
+
+const ZIP_EXCLUDE_DIR = /^(old|bk|backup|archive|template|旧|バックアップ|過去|アーカイブ|テンプレート)[\d_\-]*$/i;
+
+function decodeZipEntryName(bytes) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    return new TextDecoder("shift-jis").decode(new Uint8Array(bytes));
+  }
+}
+
+function fmtZipDate(d) {
+  if (!d) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** ZIP群からxlsx/xlsmを集め、old/BK等の履歴フォルダを除外して会社フォルダ単位でグルーピングする。 */
+async function collectZipCandidates(zipFiles) {
+  const groups = new Map(); // groupKey -> { label, candidates: [{ name, date, getBuffer }] }
+  for (const zipFile of zipFiles) {
+    const buf = await zipFile.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf, { decodeFileName: decodeZipEntryName });
+    zip.forEach((relPath, entry) => {
+      if (entry.dir) return;
+      if (!/\.(xlsx|xlsm)$/i.test(entry.name)) return;
+      const segments = entry.name.split("/").filter(Boolean);
+      const dirs = segments.slice(0, -1);
+      const parentDir = dirs.at(-1) || "";
+      if (ZIP_EXCLUDE_DIR.test(parentDir)) return; // old/BK/templateなど過去版フォルダは対象外
+
+      const groupKey = `${zipFile.name}::${dirs.join("/")}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, { label: parentDir || zipFile.name, candidates: [] });
+      groups.get(groupKey).candidates.push({
+        name: segments.at(-1),
+        date: entry.date,
+        getBuffer: () => entry.async("arraybuffer"),
+      });
+    });
+  }
+  return groups;
+}
+
+function openZipSelectOverlay(ambiguousGroups) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("zip-select-overlay");
+    const container = document.getElementById("zip-select-groups");
+    container.innerHTML = "";
+    const selections = new Map();
+
+    for (const [groupKey, group] of ambiguousGroups) {
+      const sorted = [...group.candidates].sort((a, b) => (b.date || 0) - (a.date || 0));
+      selections.set(groupKey, sorted[0]);
+
+      const box = document.createElement("div");
+      box.className = "zip-select-group";
+      const title = document.createElement("div");
+      title.className = "group-name";
+      title.textContent = `${group.label}（${sorted.length}件）`;
+      box.appendChild(title);
+
+      sorted.forEach((cand, i) => {
+        const label = document.createElement("label");
+        label.className = "candidate";
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = groupKey;
+        radio.checked = i === 0;
+        radio.addEventListener("change", () => selections.set(groupKey, cand));
+        label.appendChild(radio);
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "cand-name";
+        nameSpan.textContent = cand.name;
+        label.appendChild(nameSpan);
+        const dateSpan = document.createElement("span");
+        dateSpan.className = "cand-date";
+        dateSpan.textContent = cand.date ? `更新日時: ${fmtZipDate(cand.date)}` : "";
+        label.appendChild(dateSpan);
+        box.appendChild(label);
+      });
+      container.appendChild(box);
+    }
+
+    overlay.classList.add("open");
+    const cancelBtn = document.getElementById("zip-select-cancel");
+    const confirmBtn = document.getElementById("zip-select-confirm");
+    const cleanup = () => {
+      overlay.classList.remove("open");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+    };
+    const onConfirm = () => { cleanup(); resolve(selections); };
+    const onCancel = () => { cleanup(); resolve(null); };
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+  });
+}
+
+setupDropzone("dropzoneForecastZip", "fileInputForecastZip", async (files) => {
+  if (!files.length) return;
+  const groups = await collectZipCandidates(files);
+  if (!groups.size) { toast("ZIP内に見通管理ファイル（xlsx/xlsm）が見つかりませんでした", true); return; }
+
+  const ambiguous = new Map([...groups].filter(([, g]) => g.candidates.length > 1));
+  let selections;
+  if (ambiguous.size) {
+    selections = await openZipSelectOverlay(ambiguous);
+    if (!selections) { toast("ZIPの取り込みをキャンセルしました"); return; }
+  } else {
+    selections = new Map();
+  }
+
+  const entries = [...groups].map(([groupKey, group]) => {
+    const chosen = group.candidates.length === 1 ? group.candidates[0] : selections.get(groupKey);
+    return { name: `${group.label}/${chosen.name}`, getBuffer: chosen.getBuffer };
+  });
+  await importForecastEntries(entries);
 });
 
 function renderForecastPreview() {
