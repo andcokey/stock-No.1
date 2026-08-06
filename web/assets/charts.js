@@ -16,6 +16,14 @@ function clearChildren(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
+// Math.max(...arr) は要素数が多いとスプレッド展開でスタックオーバーフローするため、
+// reduceで最大値を求める（会社数・商材数が増えても安全な書き方）。
+function maxOf(arr, floor) {
+  let m = floor;
+  for (const v of arr) if (v > m) m = v;
+  return m;
+}
+
 function niceMax(v) {
   if (!(v > 0)) return 1;
   const pow = Math.pow(10, Math.floor(Math.log10(v)));
@@ -155,7 +163,7 @@ export function renderBarChart(container, opts) {
   const padL = 56, padR = 10, padT = 14, padB = 26;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
-  const maxV = niceMax(Math.max(0, ...values.filter((v) => v != null)));
+  const maxV = niceMax(maxOf(values.filter((v) => v != null), 0));
   const n = months.length;
   const slot = n ? plotW / n : plotW;
   const barW = Math.max(2, Math.min(24, slot - 2));
@@ -266,7 +274,7 @@ export function renderLineChart(container, opts) {
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
   const nums = values.filter((v) => v != null);
-  const maxV = domainMax != null ? domainMax : niceMax(Math.max(0, ...nums));
+  const maxV = domainMax != null ? domainMax : niceMax(maxOf(nums, 0));
   const n = months.length;
   const stepX = n > 1 ? plotW / (n - 1) : 0;
 
@@ -381,7 +389,7 @@ export function renderQuadrantScatter(container, opts) {
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
   const valid = points.filter((p) => p.x != null && p.y != null);
-  const yMaxAbs = Math.max(1, ...valid.map((p) => Math.abs(p.y)));
+  const yMaxAbs = maxOf(valid.map((p) => Math.abs(p.y)), 1);
   const yMax = niceMax(yMaxAbs);
   const yMin = -yMax;
   const xMin = 0, xMax = 1;
@@ -499,7 +507,7 @@ export function renderSparkline(container, opts) {
 
   const W = 96, H = 28, pad = 2;
   const n = values.length;
-  const maxV = Math.max(1, ...values.filter((v) => v != null).map((v) => Math.abs(v)));
+  const maxV = maxOf(values.filter((v) => v != null).map((v) => Math.abs(v)), 1);
   const slot = n ? (W - pad * 2) / n : W;
   const barW = Math.max(1.5, Math.min(8, slot - 1));
 
