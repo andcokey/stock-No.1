@@ -51,6 +51,7 @@
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
 import { companySummary, companyTargetVariance, classifyProducts } from "./lib/aggregate.mjs";
+import { renderBarChart, renderLineChart } from "./assets/charts.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
 const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
@@ -58,8 +59,11 @@ const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).t
 
 let forecast, target, summary, variance, quadrantsByCompany, boundaryMonth;
 
-function pickReferenceMonths(months, boundaryMonth, n = 6) {
-  return months.filter((m) => m < boundaryMonth).slice(-n);
+// 直近12ヵ月の実績 + すべての見通月。チャートと月次テーブルはこの同じ月範囲を共有する。
+function pickChartMonths(months, boundaryMonth, actualCount = 12) {
+  const actual = months.filter((m) => m < boundaryMonth).slice(-actualCount);
+  const forecastMonths = months.filter((m) => m >= boundaryMonth);
+  return [...actual, ...forecastMonths];
 }
 
 function renderSidebar(filter = "") {
@@ -85,7 +89,7 @@ function selectCompany(code) {
     document.getElementById("detail").innerHTML = `<div class="empty-state">会社が見つかりません</div>`;
     return;
   }
-  const months = pickReferenceMonths(forecast.months, boundaryMonth, 6);
+  const months = pickChartMonths(forecast.months, boundaryMonth, 12);
   const v = variance?.[code];
 
   const rows = months.map((m) => {
@@ -111,6 +115,16 @@ function selectCompany(code) {
 
   document.getElementById("detail").innerHTML = `
     <h2 style="margin-top:0;">${company.name} <span class="n">(${code})</span></h2>
+    <div class="chart-row">
+      <div class="card chart-card">
+        <h2>売上高（実績/見通・千円）</h2>
+        <div id="companySalesChart"></div>
+      </div>
+      <div class="card chart-card">
+        <h2>ストック比率（実績/見通）</h2>
+        <div id="companyStockRatioChart"></div>
+      </div>
+    </div>
     <div class="card table-scroll" style="margin-bottom:16px;">
       <table class="datatable">
         <thead><tr><th>月</th><th class="num">売上高（千円）</th><th class="num">ストック売上額</th><th class="num">ストック比率</th><th class="num">対目標差異（売上）</th></tr></thead>
@@ -125,6 +139,31 @@ function selectCompany(code) {
       </table>
     </div>
   `;
+
+  renderBarChart(document.getElementById("companySalesChart"), {
+    months,
+    values: months.map((m) => company.monthly[m]?.sales ?? null),
+    boundaryMonth,
+    unit: "千円",
+  });
+  renderLineChart(document.getElementById("companyStockRatioChart"), {
+    months,
+    values: months.map((m) => company.monthly[m]?.stockRatio ?? null),
+    boundaryMonth,
+    domainMax: 1,
+    seriesLabel: "ストック比率",
+    extraRows: (i) => {
+      const m = months[i];
+      const mv = company.monthly[m] || {};
+      const extra = [
+        { label: "売上高", value: `${fmtYen(mv.sales)}千円` },
+        { label: "ストック売上額", value: `${fmtYen(mv.stockSales)}千円` },
+      ];
+      const diff = v?.monthly?.[m]?.sales?.diff;
+      if (diff != null) extra.push({ label: "対目標差異（売上）", value: fmtDiff(diff) });
+      return extra;
+    },
+  });
 }
 
 async function main() {

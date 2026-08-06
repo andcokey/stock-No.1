@@ -29,6 +29,19 @@
     <div id="content" style="display:none;">
       <div class="kpi-row" id="kpiRow"></div>
 
+      <div class="chart-row">
+        <div class="card chart-card">
+          <h2>売上高トレンド（全社合計・千円）</h2>
+          <div id="salesTrendChart"></div>
+          <div id="salesTrendTable"></div>
+        </div>
+        <div class="card chart-card">
+          <h2>ストック比率トレンド（全社合計）</h2>
+          <div id="stockRatioTrendChart"></div>
+          <div id="stockRatioTrendTable"></div>
+        </div>
+      </div>
+
       <div class="mid-row">
         <div class="card">
           <h2>会社別ランキング（売上高） <span class="n" id="rankMonthLabel"></span></h2>
@@ -38,6 +51,11 @@
           <h2>商材ポートフォリオ（成長ステージ・見通） <span class="n" id="quadCount"></span></h2>
           <div class="quadgrid" id="quadGrid"></div>
         </div>
+      </div>
+
+      <div class="card chart-card" style="margin-bottom:22px;">
+        <h2>商材ポートフォリオ分布（継続率 × 顧客増加数・見通）</h2>
+        <div id="quadScatter"></div>
       </div>
     </div>
   </div>
@@ -56,6 +74,7 @@
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
 import { companySummary, classifyProducts, QUADRANT_MAP } from "./lib/aggregate.mjs";
+import { renderBarChart, renderLineChart, renderQuadrantScatter, renderToggleTable } from "./assets/charts.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
 const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
@@ -106,6 +125,41 @@ async function main() {
     <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companyList.length}<small>社</small></div></div>
   `;
 
+  // 全社合計の月次トレンド（売上高バーチャート＋ストック比率折れ線チャート）
+  const monthlyTotals = forecast.months.map((m) => {
+    let sales = 0, stock = 0;
+    for (const c of companyList) {
+      const mv = c.monthly[m];
+      if (!mv) continue;
+      sales += mv.sales || 0;
+      stock += mv.stockSales || 0;
+    }
+    return { sales, stockRatio: sales ? stock / sales : null };
+  });
+
+  renderBarChart(document.getElementById("salesTrendChart"), {
+    months: forecast.months,
+    values: monthlyTotals.map((t) => t.sales),
+    boundaryMonth,
+    unit: "千円",
+  });
+  renderToggleTable(document.getElementById("salesTrendTable"), {
+    months: forecast.months,
+    columns: [{ label: "売上高（千円）", values: monthlyTotals.map((t) => t.sales), formatValue: fmtYen }],
+  });
+
+  renderLineChart(document.getElementById("stockRatioTrendChart"), {
+    months: forecast.months,
+    values: monthlyTotals.map((t) => t.stockRatio),
+    boundaryMonth,
+    domainMax: 1,
+    seriesLabel: "ストック比率",
+  });
+  renderToggleTable(document.getElementById("stockRatioTrendTable"), {
+    months: forecast.months,
+    columns: [{ label: "ストック比率", values: monthlyTotals.map((t) => t.stockRatio), formatValue: fmtPct }],
+  });
+
   const ranked = companyList
     .map((c) => ({ ...c, sales: c.monthly[refMonth]?.sales || 0 }))
     .sort((a, b) => b.sales - a.sales)
@@ -139,6 +193,16 @@ async function main() {
       <div class="qcount">${n}<small style="font-size:12px;color:var(--ink-muted);">商材</small></div>
     </div>
   `).join("");
+
+  renderQuadrantScatter(document.getElementById("quadScatter"), {
+    points: quadrants.map((p) => ({
+      x: p.forecast.retentionValue,
+      y: p.forecast.growthValue,
+      quadrant: p.forecast.quadrant,
+      label: p.productName,
+      sub: p.companyName,
+    })),
+  });
 
   document.getElementById("content").style.display = "block";
   document.getElementById("appRoot").style.display = "block";

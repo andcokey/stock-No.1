@@ -19,6 +19,10 @@
         <div class="filtergroup" id="quadChips"></div>
         <span class="resetlink" id="resetLink">絞り込みを解除</span>
       </div>
+      <div class="card chart-card" style="margin-bottom:16px;">
+        <h2>商材ポートフォリオ分布（継続率 × 顧客増加数・見通） <span class="n" id="scatterCount"></span></h2>
+        <div id="quadScatter"></div>
+      </div>
       <div class="card table-scroll">
         <table class="datatable">
           <thead>
@@ -27,6 +31,7 @@
               <th>成長ステージ（実績）</th><th>成長ステージ（見通）</th>
               <th class="num">対目標差異（当月・売上）</th>
               <th class="num">対目標差異（当月・ストック）</th>
+              <th>売上トレンド</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -48,13 +53,17 @@
 
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
-import { classifyProducts, productTargetVariance, METRIC } from "./lib/aggregate.mjs";
+import { classifyProducts, productTargetVariance, productMetricSeries, METRIC } from "./lib/aggregate.mjs";
+import { renderQuadrantScatter, renderSparkline } from "./assets/charts.js";
 
 const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
 const QUADS = ["順調成長", "積上純増", "ジレンマ", "要改善"];
 
 let rows = [];
 let activeQuad = null;
+let forecastData = null;
+let sparkMonths = [];
+let sparkBoundaryIndex = -1;
 
 function render(filterText = "") {
   const q = filterText.trim();
@@ -72,8 +81,25 @@ function render(filterText = "") {
       <td>${r.forecast.quadrant ? `<span class="tag quad-${r.forecast.quadrant}">${r.forecast.quadrant}</span>` : "—"}</td>
       <td class="num ${cls(r.salesDiff)}">${fmtDiff(r.salesDiff)}</td>
       <td class="num ${cls(r.stockDiff)}">${fmtDiff(r.stockDiff)}</td>
+      <td><div class="spark-cell" data-code="${r.companyCode}" data-no="${r.productNo}"></div></td>
     </tr>
-  `).join("") || `<tr><td colspan="7" class="empty-state">該当する商材がありません</td></tr>`;
+  `).join("") || `<tr><td colspan="8" class="empty-state">該当する商材がありません</td></tr>`;
+
+  document.querySelectorAll(".spark-cell").forEach((cell) => {
+    const values = productMetricSeries(forecastData, cell.dataset.code, Number(cell.dataset.no), METRIC.SALES, sparkMonths);
+    renderSparkline(cell, { values, months: sparkMonths, boundaryIndex: sparkBoundaryIndex, unit: "千円" });
+  });
+
+  document.getElementById("scatterCount").textContent = `(${filtered.length}件を表示)`;
+  renderQuadrantScatter(document.getElementById("quadScatter"), {
+    points: filtered.map((r) => ({
+      x: r.forecast.retentionValue,
+      y: r.forecast.growthValue,
+      quadrant: r.forecast.quadrant,
+      label: r.productName,
+      sub: r.companyName,
+    })),
+  });
 }
 function cls(v) { return v > 0 ? "pos" : v < 0 ? "neg" : ""; }
 
@@ -100,8 +126,14 @@ async function main() {
   }
   document.getElementById("content").style.display = "block";
 
+  forecastData = forecast;
   const boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
   const refMonth = forecast.months.filter((m) => m < boundaryMonth).at(-1) || forecast.months.at(-1);
+
+  const sparkActualMonths = forecast.months.filter((m) => m < boundaryMonth).slice(-8);
+  const sparkForecastMonths = forecast.months.filter((m) => m >= boundaryMonth);
+  sparkMonths = [...sparkActualMonths, ...sparkForecastMonths];
+  sparkBoundaryIndex = sparkActualMonths.length;
 
   const quadrants = classifyProducts(forecast, { boundaryMonth });
   let salesVarianceByKey = {}, stockVarianceByKey = {};

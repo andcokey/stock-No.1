@@ -161,3 +161,65 @@ footer.note{margin-top:30px; font-size:11.5px; color:var(--ink-muted); line-heig
 }
 .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
 .toast.error{background:var(--bad);}
+
+/* --- チャート共通（charts.js） --- */
+.chart-row{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;}
+@media (max-width:900px){.chart-row{grid-template-columns:1fr;}}
+
+.chart-root{position:relative;}
+.chart-root svg text{font-family:inherit;}
+.chart-axis-label{font-size:10px; fill:var(--ink-muted);}
+.chart-axis-caption{font-size:10px; fill:var(--ink-muted);}
+.chart-gridline{stroke:var(--grid); stroke-width:1;}
+.chart-baseline{stroke:var(--baseline); stroke-width:1;}
+.chart-crosshair{stroke:var(--baseline); stroke-width:1;}
+
+.chart-bar-actual{fill:var(--accent);}
+.chart-bar-forecast{fill:var(--accent); opacity:.35;}
+.chart-line{fill:none; stroke:var(--accent); stroke-width:2; stroke-linecap:round; stroke-linejoin:round;}
+.chart-area{fill:var(--accent); opacity:.1;}
+.chart-dot{fill:var(--accent);}
+.chart-dot-ring{fill:var(--surface);}
+.chart-hit{fill:transparent; cursor:pointer;}
+.chart-hit:focus{outline:none;}
+
+.chart-quad-bg-順調成長{fill:var(--good); opacity:.07;}
+.chart-quad-bg-積上純増{fill:var(--accent); opacity:.07;}
+.chart-quad-bg-ジレンマ{fill:var(--warn); opacity:.07;}
+.chart-quad-bg-要改善{fill:var(--bad); opacity:.07;}
+.chart-quad-dot-順調成長{fill:var(--good);}
+.chart-quad-dot-積上純増{fill:var(--accent);}
+.chart-quad-dot-ジレンマ{fill:var(--warn);}
+.chart-quad-dot-要改善{fill:var(--bad);}
+.chart-quad-dot-unknown{fill:var(--ink-muted);}
+
+.chart-tooltip{
+  position:absolute; pointer-events:none; z-index:20; min-width:120px;
+  background:var(--surface-raised); border:1px solid var(--border); border-radius:8px;
+  padding:8px 10px; font-size:11.5px; line-height:1.6; color:var(--ink-2);
+  box-shadow:0 4px 14px rgba(0,0,0,.14); opacity:0; transition:opacity .08s;
+}
+.chart-tooltip.show{opacity:1;}
+.chart-tooltip.chart-tooltip-fixed{position:fixed;}
+.chart-tooltip .tt-title{font-weight:700; color:var(--ink); margin-bottom:2px; white-space:nowrap;}
+.chart-tooltip .tt-sub{color:var(--ink-muted); font-size:11px; margin-bottom:4px; white-space:nowrap;}
+.chart-tooltip .tt-row{display:flex; align-items:center; gap:8px; white-space:nowrap;}
+.chart-tooltip .tt-key{display:inline-block; width:10px; height:2px; border-radius:1px; flex:none;}
+.chart-tooltip .tt-label{color:var(--ink-muted);}
+.chart-tooltip .tt-value{font-weight:700; color:var(--ink); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.chart-legend{display:flex; gap:14px; flex-wrap:wrap; margin-top:8px; font-size:11.5px; color:var(--ink-2);}
+.chart-legend .lg-item{display:flex; align-items:center; gap:6px;}
+.chart-legend .lg-swatch{width:10px; height:10px; border-radius:2px; flex:none;}
+.chart-legend .lg-swatch.bar-actual{background:var(--accent);}
+.chart-legend .lg-swatch.bar-forecast{background:var(--accent); opacity:.35;}
+.chart-legend .lg-swatch.quad-順調成長{background:var(--good);}
+.chart-legend .lg-swatch.quad-積上純増{background:var(--accent);}
+.chart-legend .lg-swatch.quad-ジレンマ{background:var(--warn);}
+.chart-legend .lg-swatch.quad-要改善{background:var(--bad);}
+
+.chart-toggle{font-size:11.5px; color:var(--accent); cursor:pointer; user-select:none;}
+.chart-toggle:hover{text-decoration:underline;}
+.chart-tablewrap{margin-top:8px;}
+
+.spark-root{display:inline-block; vertical-align:middle;}

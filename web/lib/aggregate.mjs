@@ -110,6 +110,12 @@ function sub(a, b) {
   return (a ?? 0) - (b ?? 0);
 }
 
+/** 商材1件・指定コードの月次系列を、指定した月配列の順で返す（グラフのスパークライン用）。 */
+export function productMetricSeries(parsed, companyCode, productNo, metricCode, months) {
+  const values = parsed.companies[companyCode]?.products?.[String(productNo)]?.metrics[metricCode]?.values ?? {};
+  return months.map((m) => values[m] ?? null);
+}
+
 const QUADRANT_MAP = {
   "○○": "順調成長",
   "×○": "積上純増",
@@ -170,13 +176,17 @@ export function classifyProducts(parsed, { boundaryMonth }) {
         productType: product.type,
         actual: {
           retention: actualRetentionMark,
+          retentionValue: lastActualMonth ? retention[lastActualMonth] ?? null : null,
           growth: actualGrowthMark,
+          growthValue: lastActualMonth ? growth[lastActualMonth] ?? null : null,
           quadrant: actualQuadrant,
           salesYoy: lastActualMonth ? salesYoy[lastActualMonth] ?? null : null,
         },
         forecast: {
           retention: forecastRetentionMark,
+          retentionValue: average(forecastMonths.map((m) => retention[m])),
           growth: forecastGrowthMark,
+          growthValue: lastForecastMonth ? growth[lastForecastMonth] ?? null : null,
           quadrant: forecastQuadrant,
           salesYoySum: forecastMonths.reduce((sum, m) => sum + (salesYoy[m] ?? 0), 0),
         },
