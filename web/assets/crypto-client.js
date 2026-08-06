@@ -4,7 +4,16 @@
 const ITER = 150000;
 
 function b64(buf) {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+  // 50社分の見通/目標データはct(暗号文)が数十万バイト以上になり、
+  // String.fromCharCode(...bytes) の一括spreadだと引数展開でスタックオーバーフローする。
+  // チャンクに分けてapplyすることで回避する。
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 function unb64(str) {
   return Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
