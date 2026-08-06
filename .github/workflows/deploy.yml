@@ -27,6 +27,11 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Copy sync data into web
+        run: |
+          mkdir -p web/sync
+          if [ -d sync ]; then cp -r sync/. web/sync/; fi
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
