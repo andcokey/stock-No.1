@@ -103,7 +103,11 @@ h1{font-size:20px; font-weight:700; margin:0; letter-spacing:.01em;}
 .quadcell.improve{border-color:var(--bad);}
 
 table.datatable{width:100%; border-collapse:collapse; font-size:12.5px;}
-table.datatable th{text-align:left; color:var(--ink-muted); font-weight:600; font-size:11.5px; padding:6px 8px; border-bottom:1px solid var(--border);}
+table.datatable th{text-align:left; color:var(--ink-muted); font-weight:600; font-size:11.5px; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap;}
+table.datatable th.num{text-align:right;}
+table.datatable th.sortable{cursor:pointer; user-select:none;}
+table.datatable th.sortable:hover{color:var(--ink);}
+table.datatable th .sort-arrow{margin-left:4px; color:var(--accent);}
 table.datatable td{padding:6px 8px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums;}
 table.datatable tr:hover td{background:var(--surface-raised);}
 table.datatable td.num{text-align:right;}

@@ -374,6 +374,13 @@ export function renderLineChart(container, opts) {
   container.appendChild(svg);
 }
 
+// 顧客増加数は少数の外れ値（大口顧客の一括増加等）が全体レンジを支配しやすい。
+// 符号付き立方根（sign(v)*|v|^(1/3)）で軸を圧縮すると、0=0のまま外れ値の影響を弱めつつ、
+// 通常値が密集していたゼロ付近の点間隔を広げて重なりを解消できる（データの間引き・非表示は一切しない）。
+function signedCbrt(v) {
+  return Math.sign(v) * Math.cbrt(Math.abs(v));
+}
+
 /**
  * 商材ポートフォリオの4象限散布図（継続率 × 顧客増加数）。単一軸×単一軸のプレーンな散布図。
  * points: [{x:0-1の継続率, y:顧客増加数, quadrant:"順調成長"等, label, sub}]
@@ -393,9 +400,10 @@ export function renderQuadrantScatter(container, opts) {
   const yMax = niceMax(yMaxAbs);
   const yMin = -yMax;
   const xMin = 0, xMax = 1;
+  const yMaxT = signedCbrt(yMax);
 
   const scaleX = (v) => padL + ((v - xMin) / (xMax - xMin)) * plotW;
-  const scaleY = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+  const scaleY = (v) => padT + (1 - (signedCbrt(v) + yMaxT) / (2 * yMaxT)) * plotH;
 
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
   svg.style.width = "100%";
@@ -426,13 +434,14 @@ export function renderQuadrantScatter(container, opts) {
     lbl.textContent = Math.round(f * 100) + "%";
     svg.appendChild(lbl);
   });
-  [yMin, 0, yMax].forEach((v) => {
+  [-yMax, -yMax / 2, 0, yMax / 2, yMax].forEach((v) => {
     const y = scaleY(v);
     const lbl = svgEl("text", { x: padL - 8, y: y + 3, "text-anchor": "end", class: "chart-axis-label" });
     lbl.textContent = Math.round(v).toLocaleString("ja-JP");
     svg.appendChild(lbl);
+    if (v !== 0) svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y, y2: y, class: "chart-gridline", opacity: "0.5" }));
   });
-  svg.appendChild(Object.assign(svgEl("text", { x: padL, y: padT - 6, class: "chart-axis-caption" }), { textContent: "縦軸: 顧客増加数" }));
+  svg.appendChild(Object.assign(svgEl("text", { x: padL, y: padT - 6, class: "chart-axis-caption" }), { textContent: "縦軸: 顧客増加数（外れ値の影響を抑えるため非線形表示）" }));
   svg.appendChild(Object.assign(svgEl("text", { x: padL + plotW, y: padT - 6, "text-anchor": "end", class: "chart-axis-caption" }), { textContent: "横軸: 顧客継続率（区切り線=閾値75%）" }));
 
   const tip = ensureTooltip(container);

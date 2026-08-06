@@ -15,7 +15,7 @@
     </div>
     <div id="content" style="display:none;">
       <div class="filterbar">
-        <input class="search-input" id="searchInput" placeholder="会社名・商材名で検索" />
+        <input class="search-input" id="searchInput" placeholder="会社名・商材名で検索" autocomplete="off" />
         <div class="filtergroup" id="quadChips"></div>
         <span class="resetlink" id="resetLink">絞り込みを解除</span>
       </div>
@@ -26,13 +26,7 @@
       <div class="card table-scroll">
         <table class="datatable">
           <thead>
-            <tr>
-              <th>会社名</th><th>商材名</th><th>契約型/習慣型</th>
-              <th>成長ステージ（実績）</th><th>成長ステージ（見通）</th>
-              <th class="num">対目標差異（当月・売上）</th>
-              <th class="num">対目標差異（当月・ストック）</th>
-              <th>売上トレンド</th>
-            </tr>
+            <tr id="theadRow"></tr>
           </thead>
           <tbody id="tbody"></tbody>
         </table>
@@ -58,20 +52,67 @@ import { renderQuadrantScatter, renderSparkline } from "./assets/charts.js";
 
 const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
 const QUADS = ["順調成長", "積上純増", "ジレンマ", "要改善"];
+const QUAD_RANK = { "順調成長": 0, "積上純増": 1, "ジレンマ": 2, "要改善": 3 };
+
+// key: 内部識別子, label: 見出し, sortable: false ならクリック無効（スパークライン等、単一値を持たない列）
+const COLUMNS = [
+  { key: "companyName", label: "会社名", sortable: true, get: (r) => r.companyName },
+  { key: "productName", label: "商材名", sortable: true, get: (r) => r.productName },
+  { key: "productType", label: "契約型/習慣型", sortable: true, get: (r) => r.productType || "" },
+  { key: "actualQuadrant", label: "成長ステージ（実績）", sortable: true, get: (r) => QUAD_RANK[r.actual.quadrant] ?? 99 },
+  { key: "forecastQuadrant", label: "成長ステージ（見通）", sortable: true, get: (r) => QUAD_RANK[r.forecast.quadrant] ?? 99 },
+  { key: "salesDiff", label: "対目標差異（当月・売上）", sortable: true, num: true, get: (r) => r.salesDiff },
+  { key: "stockDiff", label: "対目標差異（当月・ストック）", sortable: true, num: true, get: (r) => r.stockDiff },
+  { key: "trend", label: "売上トレンド", sortable: false },
+];
 
 let rows = [];
 let activeQuad = null;
 let forecastData = null;
 let sparkMonths = [];
 let sparkBoundaryIndex = -1;
+let sortKey = null;
+let sortDir = 1;
+
+function renderThead() {
+  document.getElementById("theadRow").innerHTML = COLUMNS.map((c) => {
+    const cls = [c.num ? "num" : "", c.sortable ? "sortable" : ""].filter(Boolean).join(" ");
+    const arrow = c.key === sortKey ? `<span class="sort-arrow">${sortDir > 0 ? "▲" : "▼"}</span>` : "";
+    return `<th class="${cls}" data-key="${c.key}">${c.label}${arrow}</th>`;
+  }).join("");
+  document.querySelectorAll("#theadRow th.sortable").forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      sortDir = sortKey === key ? -sortDir : 1;
+      sortKey = key;
+      render(document.getElementById("searchInput").value);
+    });
+  });
+}
+
+function sortRows(list) {
+  if (!sortKey) return list;
+  const col = COLUMNS.find((c) => c.key === sortKey);
+  if (!col) return list;
+  return [...list].sort((a, b) => {
+    const av = col.get(a), bv = col.get(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    const cmp = typeof av === "string" ? av.localeCompare(bv, "ja") : av - bv;
+    return cmp * sortDir;
+  });
+}
 
 function render(filterText = "") {
   const q = filterText.trim();
-  const filtered = rows.filter((r) => {
+  let filtered = rows.filter((r) => {
     if (activeQuad && r.forecast.quadrant !== activeQuad) return false;
     if (!q) return true;
     return r.companyName.includes(q) || r.productName.includes(q);
   });
+  filtered = sortRows(filtered);
+  renderThead();
   document.getElementById("tbody").innerHTML = filtered.map((r) => `
     <tr>
       <td>${r.companyName}</td>
