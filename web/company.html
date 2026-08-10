@@ -59,6 +59,22 @@ const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).t
 
 let forecast, target, summary, variance, quadrantsByCompany, boundaryMonth;
 
+// ブラウザの自動入力がautocomplete="off"でも過去の値（別画面のGAS URL欄等）を復元し、
+// 検索結果が「該当なし」に固定されてしまうことがあるため、実際のキー入力/貼り付けを
+// 伴わないinputイベント（＝自動入力由来）は無視して値をクリアする。
+function attachSearchGuard(input, onChange) {
+  let userEdited = false;
+  input.addEventListener("keydown", () => { userEdited = true; });
+  input.addEventListener("paste", () => { userEdited = true; });
+  input.addEventListener("input", (e) => {
+    if (!userEdited) {
+      e.target.value = "";
+      return;
+    }
+    onChange(e.target.value);
+  });
+}
+
 // 直近12ヵ月の実績 + すべての見通月。チャートと月次テーブルはこの同じ月範囲を共有する。
 function pickChartMonths(months, boundaryMonth, actualCount = 12) {
   const actual = months.filter((m) => m < boundaryMonth).slice(-actualCount);
@@ -186,7 +202,7 @@ async function main() {
   for (const p of allQuadrants) (quadrantsByCompany[p.companyCode] ||= []).push(p);
 
   renderSidebar();
-  document.getElementById("searchInput").addEventListener("input", (e) => renderSidebar(e.target.value));
+  attachSearchGuard(document.getElementById("searchInput"), (value) => renderSidebar(value));
 
   const initialCode = new URLSearchParams(location.search).get("code") || Object.keys(summary)[0];
   if (initialCode) selectCompany(initialCode);

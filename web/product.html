@@ -51,6 +51,23 @@ import { classifyProducts, productTargetVariance, productMetricSeries, METRIC } 
 import { renderQuadrantScatter, renderSparkline } from "./assets/charts.js";
 
 const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
+
+// ブラウザの自動入力がautocomplete="off"でも過去の値（別画面のGAS URL欄等）を復元し、
+// 検索結果が0件に固定されてしまうことがあるため、実際のキー入力/貼り付けを
+// 伴わないinputイベント（＝自動入力由来）は無視して値をクリアする。
+function attachSearchGuard(input, onChange) {
+  let userEdited = false;
+  input.addEventListener("keydown", () => { userEdited = true; });
+  input.addEventListener("paste", () => { userEdited = true; });
+  input.addEventListener("input", (e) => {
+    if (!userEdited) {
+      e.target.value = "";
+      return;
+    }
+    onChange(e.target.value);
+  });
+}
+
 const QUADS = ["順調成長", "積上純増", "ジレンマ", "要改善"];
 const QUAD_RANK = { "順調成長": 0, "積上純増": 1, "ジレンマ": 2, "要改善": 3 };
 
@@ -194,7 +211,7 @@ async function main() {
 
   renderChips();
   render();
-  document.getElementById("searchInput").addEventListener("input", (e) => render(e.target.value));
+  attachSearchGuard(document.getElementById("searchInput"), (value) => render(value));
   document.getElementById("resetLink").addEventListener("click", () => {
     activeQuad = null;
     document.getElementById("searchInput").value = "";
