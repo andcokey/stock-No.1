@@ -50,14 +50,21 @@
 
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
-import { companySummary, companyTargetVariance, classifyProducts } from "./lib/aggregate.mjs";
+import { companySummary, companyTargetVariance, classifyProducts, KPI_DEFS, companyKpiTable, kpiSeries } from "./lib/aggregate.mjs";
 import { renderBarChart, renderLineChart } from "./assets/charts.js";
+import { renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange } from "./assets/kpiPanel.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
 const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
 const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
 
+const ALL_KPIS = [
+  { key: "stockRatio", label: "ストック比率", unit: "percent" },
+  ...KPI_DEFS.map((k) => ({ key: k.key, label: k.label, unit: k.unit })),
+];
+
 let forecast, target, summary, variance, quadrantsByCompany, boundaryMonth;
+let currentRange = null; // 会社を切り替えても選んだ表示期間を維持する
 
 // ブラウザの自動入力がautocomplete="off"でも過去の値（別画面のGAS URL欄等）を復元し、
 // 検索結果が「該当なし」に固定されてしまうことがあるため、実際のキー入力/貼り付けを
@@ -147,6 +154,14 @@ function selectCompany(code) {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="kpi-section-head">
+        <h2>KPI一覧（目標・実績/見通・目標差異） <span class="n" id="companyKpiMonthLabel"></span></h2>
+        <div id="companyPeriodPicker"></div>
+      </div>
+      <div class="table-scroll"><div id="companyKpiTableEl"></div></div>
+      <div id="companyKpiChartGrid"></div>
+    </div>
     <h3 style="font-size:13px;">傘下商材（${products.length}件）</h3>
     <div class="card table-scroll">
       <table class="datatable">
@@ -180,6 +195,38 @@ function selectCompany(code) {
       return extra;
     },
   });
+
+  renderCompanyKpiSection(code);
+}
+
+/**
+ * KPI一覧（①②③④⑤⑥⑧⑨⑪＋ストック比率）の期間ピッカー・テーブル・グラフグリッド。
+ * 会社を切り替えても選んだ表示期間（currentRange）は維持する。
+ */
+function renderCompanyKpiSection(code) {
+  const scope = { kind: "company", companyCode: code };
+  const availableKpis = ALL_KPIS.filter((k) => kpiSeriesHasData(kpiSeries(forecast, target, scope, k.key, forecast.months)));
+  const defaults = defaultPeriodRange(forecast.months, boundaryMonth);
+  if (!currentRange) currentRange = defaults;
+
+  function render(start, end) {
+    currentRange = { start, end };
+    const rangeMonths = forecast.months.filter((m) => m >= start && m <= end);
+    const endMonth = rangeMonths.at(-1) || forecast.months.at(-1);
+    document.getElementById("companyKpiMonthLabel").textContent = `(${endMonth}時点)`;
+    const rows = companyKpiTable(forecast, target, code, endMonth).filter((r) => availableKpis.some((k) => k.key === r.key));
+    renderKpiTable(document.getElementById("companyKpiTableEl"), rows);
+
+    const seriesByKey = {};
+    for (const k of availableKpis) seriesByKey[k.key] = kpiSeries(forecast, target, scope, k.key, rangeMonths);
+    renderKpiChartGrid(document.getElementById("companyKpiChartGrid"), { kpis: availableKpis, months: rangeMonths, seriesByKey });
+  }
+
+  renderPeriodRangePicker(document.getElementById("companyPeriodPicker"), {
+    months: forecast.months, defaultStart: currentRange.start, defaultEnd: currentRange.end,
+    onChange: render,
+  });
+  render(currentRange.start, currentRange.end);
 }
 
 async function main() {

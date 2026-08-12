@@ -45,12 +45,38 @@
   </div>
 </div>
 
+<div id="product-detail-overlay">
+  <div class="product-detail-panel">
+    <div class="pd-head">
+      <div>
+        <div class="pd-title" id="pdTitle"></div>
+        <div class="pd-sub" id="pdSub"></div>
+      </div>
+      <button class="pd-close" id="pdClose">閉じる ✕</button>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="kpi-section-head">
+        <h2>KPI一覧（目標・実績/見通・目標差異） <span class="n" id="pdKpiMonthLabel"></span></h2>
+        <div id="pdPeriodPicker"></div>
+      </div>
+      <div class="table-scroll"><div id="pdKpiTable"></div></div>
+      <div id="pdKpiChartGrid"></div>
+    </div>
+  </div>
+</div>
+
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
-import { classifyProducts, productTargetVariance, productMetricSeries, METRIC } from "./lib/aggregate.mjs";
+import { classifyProducts, productTargetVariance, productMetricSeries, METRIC, KPI_DEFS, productKpiTable, kpiSeries } from "./lib/aggregate.mjs";
 import { renderQuadrantScatter, renderSparkline } from "./assets/charts.js";
+import { renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange } from "./assets/kpiPanel.js";
 
 const fmtDiff = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
+
+const ALL_KPIS = [
+  { key: "stockRatio", label: "ストック比率", unit: "percent" },
+  ...KPI_DEFS.map((k) => ({ key: k.key, label: k.label, unit: k.unit })),
+];
 
 // ブラウザの自動入力がautocomplete="off"でも過去の値（別画面のGAS URL欄等）を復元し、
 // 検索結果が0件に固定されてしまうことがあるため、実際のキー入力/貼り付けを
@@ -86,6 +112,8 @@ const COLUMNS = [
 let rows = [];
 let activeQuad = null;
 let forecastData = null;
+let targetData = null;
+let boundaryMonth = null;
 let sparkMonths = [];
 let sparkBoundaryIndex = -1;
 let sortKey = null;
@@ -131,7 +159,7 @@ function render(filterText = "") {
   filtered = sortRows(filtered);
   renderThead();
   document.getElementById("tbody").innerHTML = filtered.map((r) => `
-    <tr>
+    <tr class="product-row" data-code="${r.companyCode}" data-no="${r.productNo}" style="cursor:pointer;">
       <td>${r.companyName}</td>
       <td>${r.productName}</td>
       <td>${r.productType || "—"}</td>
@@ -146,6 +174,14 @@ function render(filterText = "") {
   document.querySelectorAll(".spark-cell").forEach((cell) => {
     const values = productMetricSeries(forecastData, cell.dataset.code, Number(cell.dataset.no), METRIC.SALES, sparkMonths);
     renderSparkline(cell, { values, months: sparkMonths, boundaryIndex: sparkBoundaryIndex, unit: "千円" });
+  });
+
+  // 商材名クリック→KPI一覧・グラフの詳細パネルを開く（スパークラインのホバーとは独立したクリック領域）
+  document.querySelectorAll(".product-row").forEach((tr) => {
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest(".spark-cell")) return;
+      openProductDetail(tr.dataset.code, Number(tr.dataset.no));
+    });
   });
 
   document.getElementById("scatterCount").textContent = `(${filtered.length}件を表示)`;
@@ -174,6 +210,50 @@ function renderChips() {
   });
 }
 
+/** 商材1件のKPI一覧・グラフを右側のスライドオーバーパネルに表示する。 */
+function openProductDetail(companyCode, productNo) {
+  const row = rows.find((r) => r.companyCode === companyCode && r.productNo === productNo);
+  document.getElementById("pdTitle").textContent = row?.productName || "商材";
+  document.getElementById("pdSub").textContent = row ? `${row.companyName}（${row.productType || "—"}）` : "";
+
+  const scope = { kind: "product", companyCode, productNo };
+  const availableKpis = ALL_KPIS.filter((k) => kpiSeriesHasData(kpiSeries(forecastData, targetData, scope, k.key, forecastData.months)));
+  const { start: defStart, end: defEnd } = defaultPeriodRange(forecastData.months, boundaryMonth);
+
+  function render(start, end) {
+    const rangeMonths = forecastData.months.filter((m) => m >= start && m <= end);
+    const endMonth = rangeMonths.at(-1) || forecastData.months.at(-1);
+    document.getElementById("pdKpiMonthLabel").textContent = `(${endMonth}時点)`;
+    const kpiRows = productKpiTable(forecastData, targetData, companyCode, productNo, endMonth)
+      .filter((r) => availableKpis.some((k) => k.key === r.key));
+    renderKpiTable(document.getElementById("pdKpiTable"), kpiRows);
+
+    const seriesByKey = {};
+    for (const k of availableKpis) seriesByKey[k.key] = kpiSeries(forecastData, targetData, scope, k.key, rangeMonths);
+    renderKpiChartGrid(document.getElementById("pdKpiChartGrid"), { kpis: availableKpis, months: rangeMonths, seriesByKey });
+  }
+
+  renderPeriodRangePicker(document.getElementById("pdPeriodPicker"), {
+    months: forecastData.months, defaultStart: defStart, defaultEnd: defEnd,
+    onChange: render,
+  });
+  render(defStart, defEnd);
+
+  document.getElementById("product-detail-overlay").classList.add("open");
+}
+
+function closeProductDetail() {
+  document.getElementById("product-detail-overlay").classList.remove("open");
+}
+
+document.getElementById("pdClose").addEventListener("click", closeProductDetail);
+document.getElementById("product-detail-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "product-detail-overlay") closeProductDetail();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeProductDetail();
+});
+
 async function main() {
   const { forecast, target } = await loadSnapshots();
   document.getElementById("loadingScreen").style.display = "none";
@@ -185,7 +265,8 @@ async function main() {
   document.getElementById("content").style.display = "block";
 
   forecastData = forecast;
-  const boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
+  targetData = target;
+  boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
   const refMonth = forecast.months.filter((m) => m < boundaryMonth).at(-1) || forecast.months.at(-1);
 
   const sparkActualMonths = forecast.months.filter((m) => m < boundaryMonth).slice(-8);

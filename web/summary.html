@@ -57,6 +57,15 @@
         <h2>商材ポートフォリオ分布（継続率 × 顧客増加数・見通）</h2>
         <div id="quadScatter"></div>
       </div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <div class="kpi-section-head">
+          <h2>全社KPI一覧（目標・実績/見通・目標差異） <span class="n" id="kpiTableMonthLabel"></span></h2>
+          <div id="periodPicker"></div>
+        </div>
+        <div class="table-scroll"><div id="groupKpiTable"></div></div>
+        <div id="groupKpiChartGrid"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -73,11 +82,19 @@
 
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
-import { companySummary, classifyProducts, QUADRANT_MAP } from "./lib/aggregate.mjs";
+import { companySummary, classifyProducts, QUADRANT_MAP, KPI_DEFS, groupKpiTable, kpiSeries } from "./lib/aggregate.mjs";
 import { renderBarChart, renderLineChart, renderQuadrantScatter, renderToggleTable } from "./assets/charts.js";
+import { renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange } from "./assets/kpiPanel.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
 const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
+const fmtDiffYen = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
+const fmtDiffPct = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "pt";
+
+const ALL_KPIS = [
+  { key: "stockRatio", label: "ストック比率", unit: "percent" },
+  ...KPI_DEFS.map((k) => ({ key: k.key, label: k.label, unit: k.unit })),
+];
 
 function pickReferenceMonth(months, boundaryMonth) {
   const actual = months.filter((m) => m < boundaryMonth);
@@ -85,9 +102,9 @@ function pickReferenceMonth(months, boundaryMonth) {
 }
 
 async function main() {
-  let forecast;
+  let forecast, target;
   try {
-    ({ forecast } = await loadSnapshots());
+    ({ forecast, target } = await loadSnapshots());
   } catch (e) {
     document.getElementById("loadingScreen").style.display = "none";
     document.getElementById("errorScreen").style.display = "block";
@@ -118,10 +135,30 @@ async function main() {
   }
   const stockRatio = totalSales ? totalStock / totalSales : null;
 
+  // 目標データがあれば、主要3タイルに対目標差異バッジを添える（このダッシュボードの最大の改善要望）。
+  // 売上高・ストック売上額・ストック比率は既存のcompanySummary（会社サマリー行優先・商材合算フォールバック）と
+  // 同じ計算方法を使い、タイルの数値本体と差異バッジの間で計算方法がずれないようにする。
+  let salesDiffBadge = "", stockDiffBadge = "", ratioDiffBadge = "";
+  if (target) {
+    const targetSummary = companySummary(target);
+    let targetSales = 0, targetStock = 0;
+    for (const c of Object.values(targetSummary)) {
+      const m = c.monthly[refMonth] || {};
+      targetSales += m.sales || 0;
+      targetStock += m.stockSales || 0;
+    }
+    const targetRatio = targetSales ? targetStock / targetSales : null;
+    const salesDiff = totalSales - targetSales, stockDiff = totalStock - targetStock;
+    const ratioDiff = stockRatio != null && targetRatio != null ? stockRatio - targetRatio : null;
+    salesDiffBadge = `<div class="kpi-diff ${salesDiff > 0 ? "pos" : salesDiff < 0 ? "neg" : ""}">対目標 ${fmtDiffYen(salesDiff)}</div>`;
+    stockDiffBadge = `<div class="kpi-diff ${stockDiff > 0 ? "pos" : stockDiff < 0 ? "neg" : ""}">対目標 ${fmtDiffYen(stockDiff)}</div>`;
+    ratioDiffBadge = `<div class="kpi-diff ${ratioDiff > 0 ? "pos" : ratioDiff < 0 ? "neg" : ""}">対目標 ${fmtDiffPct(ratioDiff)}</div>`;
+  }
+
   document.getElementById("kpiRow").innerHTML = `
-    <div class="card"><div class="kpi-label">売上高（千円）</div><div class="kpi-value">${fmtYen(totalSales)}</div></div>
-    <div class="card"><div class="kpi-label">ストック売上額（千円）</div><div class="kpi-value">${fmtYen(totalStock)}</div></div>
-    <div class="card"><div class="kpi-label">ストック比率</div><div class="kpi-value">${fmtPct(stockRatio)}</div></div>
+    <div class="card"><div class="kpi-label">売上高（千円）</div><div class="kpi-value">${fmtYen(totalSales)}</div>${salesDiffBadge}</div>
+    <div class="card"><div class="kpi-label">ストック売上額（千円）</div><div class="kpi-value">${fmtYen(totalStock)}</div>${stockDiffBadge}</div>
+    <div class="card"><div class="kpi-label">ストック比率</div><div class="kpi-value">${fmtPct(stockRatio)}</div>${ratioDiffBadge}</div>
     <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companyList.length}<small>社</small></div></div>
   `;
 
@@ -203,6 +240,30 @@ async function main() {
       sub: p.companyName,
     })),
   });
+
+  // 全社KPI一覧: ①②③④⑤⑥⑧⑨⑪＋ストック比率。実績・目標ともに全期間データが無いKPIはグラフ・表から外す
+  // （⑦アップセル・クロスセル数／⑩NRRは元テンプレートに項目が無いためKPI_DEFSに含まれておらず、常に対象外）。
+  const groupScope = { kind: "group" };
+  const availableKpis = ALL_KPIS.filter((k) => kpiSeriesHasData(kpiSeries(forecast, target, groupScope, k.key, forecast.months)));
+  const { start: defStart, end: defEnd } = defaultPeriodRange(forecast.months, boundaryMonth);
+
+  function renderGroupKpiSection(start, end) {
+    const rangeMonths = forecast.months.filter((m) => m >= start && m <= end);
+    const endMonth = rangeMonths.at(-1) || refMonth;
+    document.getElementById("kpiTableMonthLabel").textContent = `(${endMonth}時点)`;
+    const rows = groupKpiTable(forecast, target, endMonth).filter((r) => availableKpis.some((k) => k.key === r.key));
+    renderKpiTable(document.getElementById("groupKpiTable"), rows);
+
+    const seriesByKey = {};
+    for (const k of availableKpis) seriesByKey[k.key] = kpiSeries(forecast, target, groupScope, k.key, rangeMonths);
+    renderKpiChartGrid(document.getElementById("groupKpiChartGrid"), { kpis: availableKpis, months: rangeMonths, seriesByKey });
+  }
+
+  renderPeriodRangePicker(document.getElementById("periodPicker"), {
+    months: forecast.months, defaultStart: defStart, defaultEnd: defEnd,
+    onChange: renderGroupKpiSection,
+  });
+  renderGroupKpiSection(defStart, defEnd);
 
   document.getElementById("content").style.display = "block";
   document.getElementById("appRoot").style.display = "block";

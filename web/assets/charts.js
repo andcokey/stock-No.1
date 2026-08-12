@@ -255,13 +255,14 @@ export function renderBarChart(container, opts) {
 
 /**
  * 月次折れ線チャート（単一軸）。domainMaxを渡すと0〜domainMaxに固定（比率系に使用）。
+ * yMin/yMaxを渡すと任意の範囲に固定できる（ユーザーが表示レンジを指定するUI向け。省略時は0〜自動maxのまま）。
  * extraRows(index) を渡すとツールチップに追加行を出せる（ホバー詳細の拡張用）。
  */
 export function renderLineChart(container, opts) {
   const {
     months, values, boundaryMonth,
     height = 200, unit = "%", seriesLabel = "値",
-    domainMax = null,
+    domainMax = null, yMin = null, yMax = null,
     formatValue = (v) => (v == null ? "—" : (v * 100).toFixed(1) + "%"),
     extraRows = null,
   } = opts;
@@ -274,7 +275,9 @@ export function renderLineChart(container, opts) {
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
   const nums = values.filter((v) => v != null);
-  const maxV = domainMax != null ? domainMax : niceMax(maxOf(nums, 0));
+  const effMin = yMin != null ? yMin : 0;
+  const effMax = yMax != null ? yMax : (domainMax != null ? domainMax : niceMax(maxOf(nums, 0)));
+  const span = effMax - effMin || 1;
   const n = months.length;
   const stepX = n > 1 ? plotW / (n - 1) : 0;
 
@@ -289,14 +292,15 @@ export function renderLineChart(container, opts) {
     const y = padT + plotH * (1 - frac);
     svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: frac === 0 ? "chart-baseline" : "chart-gridline" }));
     const label = svgEl("text", { x: padL - 8, y: y + 3, "text-anchor": "end", class: "chart-axis-label" });
-    label.textContent = frac === 0 ? "0" : formatValue(maxV * frac);
+    const gridValue = effMin + span * frac;
+    label.textContent = frac === 0 && effMin === 0 ? "0" : formatValue(gridValue);
     svg.appendChild(label);
   });
 
   const pts = months.map((m, i) => {
     const v = values[i];
     const x = padL + i * stepX;
-    const y = v == null ? null : padT + plotH * (1 - Math.min(1, Math.max(0, v / maxV)));
+    const y = v == null ? null : padT + plotH * (1 - Math.min(1, Math.max(0, (v - effMin) / span)));
     return { x, y, v, m };
   });
 
@@ -372,6 +376,160 @@ export function renderLineChart(container, opts) {
   });
 
   container.appendChild(svg);
+}
+
+/**
+ * 目標比較チャート（実績/見通の実線＋目標の破線を1つの軸に重ねる）。KPI一覧の各指標グラフで使用する。
+ * yMin/yMaxを渡すと表示レンジを固定できる（省略時は両系列の値から自動スケール、0起点）。
+ */
+export function renderComparisonChart(container, opts) {
+  const {
+    months, actual, target,
+    height = 200,
+    yMin = null, yMax = null,
+    actualLabel = "実績/見通", targetLabel = "目標",
+    formatValue = (v) => (v == null ? "—" : Math.round(v).toLocaleString("ja-JP")),
+  } = opts;
+
+  clearChildren(container);
+  container.classList.add("chart-root");
+
+  const W = 680, H = height;
+  const padL = 58, padR = 10, padT = 14, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  const nums = [...actual, ...target].filter((v) => v != null);
+  const effMin = yMin != null ? yMin : 0;
+  const effMax = yMax != null ? yMax : niceMax(maxOf(nums, 0));
+  const span = effMax - effMin || 1;
+  const n = months.length;
+  const stepX = n > 1 ? plotW / (n - 1) : 0;
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.style.width = "100%";
+  svg.style.height = "auto";
+  svg.style.display = "block";
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "目標比較折れ線チャート");
+
+  [0, 0.5, 1].forEach((frac) => {
+    const y = padT + plotH * (1 - frac);
+    svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: frac === 0 ? "chart-baseline" : "chart-gridline" }));
+    const label = svgEl("text", { x: padL - 8, y: y + 3, "text-anchor": "end", class: "chart-axis-label" });
+    const gridValue = effMin + span * frac;
+    label.textContent = frac === 0 && effMin === 0 ? "0" : formatValue(gridValue);
+    svg.appendChild(label);
+  });
+
+  function toPoints(values) {
+    return months.map((m, i) => {
+      const v = values[i];
+      const x = padL + i * stepX;
+      const y = v == null ? null : padT + plotH * (1 - Math.min(1, Math.max(0, (v - effMin) / span)));
+      return { x, y, v, m };
+    });
+  }
+  const actualPts = toPoints(actual);
+  const targetPts = toPoints(target);
+
+  function drawLine(pts, lineClass, areaClass) {
+    const segments = [];
+    let cur = [];
+    pts.forEach((p) => {
+      if (p.y == null) {
+        if (cur.length) segments.push(cur);
+        cur = [];
+      } else {
+        cur.push(p);
+      }
+    });
+    if (cur.length) segments.push(cur);
+    segments.forEach((seg) => {
+      if (seg.length < 2) return;
+      const lineD = seg.map((p, idx) => (idx === 0 ? `M${p.x} ${p.y}` : `L${p.x} ${p.y}`)).join(" ");
+      if (areaClass) {
+        const areaD = `M${seg[0].x} ${padT + plotH} ` +
+          seg.map((p) => `L${p.x} ${p.y}`).join(" ") +
+          ` L${seg[seg.length - 1].x} ${padT + plotH} Z`;
+        svg.appendChild(svgEl("path", { d: areaD, class: areaClass }));
+      }
+      svg.appendChild(svgEl("path", { d: lineD, class: lineClass }));
+    });
+  }
+
+  drawLine(targetPts, "chart-line-target", null);
+  drawLine(actualPts, "chart-line", "chart-area");
+
+  const tip = ensureTooltip(container);
+  const crosshair = svgEl("line", { class: "chart-crosshair", y1: padT, y2: padT + plotH, x1: -100, x2: -100, opacity: 0 });
+  svg.appendChild(crosshair);
+
+  const labelEvery = Math.max(1, Math.ceil(n / 9));
+
+  months.forEach((m, i) => {
+    if (i % labelEvery === 0 || i === n - 1) {
+      const lbl = svgEl("text", { x: padL + i * stepX, y: H - 6, "text-anchor": "middle", class: "chart-axis-label" });
+      lbl.textContent = formatMonthShort(m);
+      svg.appendChild(lbl);
+    }
+
+    const av = actual[i], tv = target[i];
+    if (av == null && tv == null) return;
+    const x = padL + i * stepX;
+
+    if (targetPts[i].y != null) svg.appendChild(svgEl("circle", { cx: x, cy: targetPts[i].y, r: 3, class: "chart-dot-target" }));
+    if (actualPts[i].y != null) {
+      svg.appendChild(svgEl("circle", { cx: x, cy: actualPts[i].y, r: 5, class: "chart-dot-ring" }));
+      svg.appendChild(svgEl("circle", { cx: x, cy: actualPts[i].y, r: 3, class: "chart-dot" }));
+    }
+
+    const hitW = Math.max(12, stepX);
+    const hit = svgEl("rect", { x: x - hitW / 2, y: padT, width: hitW, height: plotH, class: "chart-hit", tabindex: "0" });
+    const diff = av != null && tv != null ? av - tv : null;
+    hit.setAttribute("aria-label", `${formatMonthLong(m)}: ${actualLabel} ${formatValue(av)} / ${targetLabel} ${formatValue(tv)}`);
+
+    const onEnter = (clientX, clientY) => {
+      crosshair.setAttribute("x1", x);
+      crosshair.setAttribute("x2", x);
+      crosshair.setAttribute("opacity", "1");
+      showTooltip(tip, container, clientX, clientY, (t) => {
+        ttTitle(t, formatMonthLong(m));
+        ttRow(t, { label: actualLabel, value: formatValue(av), color: "var(--accent)" });
+        ttRow(t, { label: targetLabel, value: formatValue(tv), color: "var(--ink-muted)" });
+        if (diff != null) ttRow(t, { label: "差異", value: (diff >= 0 ? "+" : "") + formatValue(diff) });
+      });
+    };
+    const onLeave = () => {
+      crosshair.setAttribute("opacity", "0");
+      hideTooltip(tip);
+    };
+    hit.addEventListener("pointerenter", (e) => onEnter(e.clientX, e.clientY));
+    hit.addEventListener("pointermove", (e) => onEnter(e.clientX, e.clientY));
+    hit.addEventListener("pointerleave", onLeave);
+    hit.addEventListener("focus", () => {
+      const rect = hit.getBoundingClientRect();
+      onEnter(rect.left + rect.width / 2, rect.top);
+    });
+    hit.addEventListener("blur", onLeave);
+    svg.appendChild(hit);
+  });
+
+  container.appendChild(svg);
+
+  const legend = document.createElement("div");
+  legend.className = "chart-legend";
+  [["bar-actual", actualLabel], ["line-target", targetLabel]].forEach(([cls, label]) => {
+    const item = document.createElement("span");
+    item.className = "lg-item";
+    const sw = document.createElement("span");
+    sw.className = `lg-swatch ${cls}`;
+    const lab = document.createElement("span");
+    lab.textContent = label;
+    item.appendChild(sw);
+    item.appendChild(lab);
+    legend.appendChild(item);
+  });
+  container.appendChild(legend);
 }
 
 // 顧客増加数は少数の外れ値（大口顧客の一括増加等）が全体レンジを支配しやすい。
