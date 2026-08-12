@@ -29,17 +29,12 @@
     <div id="content" style="display:none;">
       <div class="kpi-row" id="kpiRow"></div>
 
-      <div class="chart-row">
-        <div class="card chart-card">
-          <h2>売上高トレンド（全社合計・千円）</h2>
-          <div id="salesTrendChart"></div>
-          <div id="salesTrendTable"></div>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="kpi-section-head">
+          <h2>全社トレンド（目標・実績/見通）</h2>
+          <div id="trendPeriodPicker"></div>
         </div>
-        <div class="card chart-card">
-          <h2>ストック比率トレンド（全社合計）</h2>
-          <div id="stockRatioTrendChart"></div>
-          <div id="stockRatioTrendTable"></div>
-        </div>
+        <div id="trendChartGrid"></div>
       </div>
 
       <div class="mid-row">
@@ -83,7 +78,7 @@
 <script type="module">
 import { loadSnapshots } from "./assets/data-client.js";
 import { companySummary, classifyProducts, QUADRANT_MAP, KPI_DEFS, groupKpiTable, kpiSeries } from "./lib/aggregate.mjs";
-import { renderBarChart, renderLineChart, renderQuadrantScatter, renderToggleTable } from "./assets/charts.js";
+import { renderQuadrantScatter } from "./assets/charts.js";
 import { renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange } from "./assets/kpiPanel.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
@@ -162,40 +157,53 @@ async function main() {
     <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companyList.length}<small>社</small></div></div>
   `;
 
-  // 全社合計の月次トレンド（売上高バーチャート＋ストック比率折れ線チャート）
-  const monthlyTotals = forecast.months.map((m) => {
-    let sales = 0, stock = 0;
-    for (const c of companyList) {
-      const mv = c.monthly[m];
-      if (!mv) continue;
-      sales += mv.sales || 0;
-      stock += mv.stockSales || 0;
+  // 全社合計の月次トレンド（売上高・ストック比率）。下部の全社KPI一覧と同じ
+  // 「目標(破線)・実績/見通(実線)」比較グラフ＋期間/Y軸レンジ選択を、この上部サマリーにも適用する。
+  function groupTotalsSeries(parsed, months) {
+    if (!parsed) return { sales: months.map(() => null), stockRatio: months.map(() => null) };
+    const companies = Object.values(companySummary(parsed));
+    const sales = [], stockRatio = [];
+    for (const m of months) {
+      let s = 0, st = 0, any = false;
+      for (const c of companies) {
+        const mv = c.monthly[m];
+        if (!mv) continue;
+        any = true;
+        s += mv.sales || 0;
+        st += mv.stockSales || 0;
+      }
+      sales.push(any ? s : null);
+      stockRatio.push(any && s ? st / s : null);
     }
-    return { sales, stockRatio: sales ? stock / sales : null };
-  });
+    return { sales, stockRatio };
+  }
 
-  renderBarChart(document.getElementById("salesTrendChart"), {
-    months: forecast.months,
-    values: monthlyTotals.map((t) => t.sales),
-    boundaryMonth,
-    unit: "千円",
-  });
-  renderToggleTable(document.getElementById("salesTrendTable"), {
-    months: forecast.months,
-    columns: [{ label: "売上高（千円）", values: monthlyTotals.map((t) => t.sales), formatValue: fmtYen }],
-  });
+  const TREND_KPIS = [
+    { key: "sales", label: "売上高（千円）", unit: "yen" },
+    { key: "stockRatio", label: "ストック比率", unit: "percent" },
+  ];
 
-  renderLineChart(document.getElementById("stockRatioTrendChart"), {
-    months: forecast.months,
-    values: monthlyTotals.map((t) => t.stockRatio),
-    boundaryMonth,
-    domainMax: 1,
-    seriesLabel: "ストック比率",
+  function renderTrendSection(start, end) {
+    const rangeMonths = forecast.months.filter((m) => m >= start && m <= end);
+    const actualTotals = groupTotalsSeries(forecast, rangeMonths);
+    const targetTotals = groupTotalsSeries(target, rangeMonths);
+    renderKpiChartGrid(document.getElementById("trendChartGrid"), {
+      kpis: TREND_KPIS,
+      months: rangeMonths,
+      seriesByKey: {
+        sales: { actual: actualTotals.sales, target: targetTotals.sales },
+        stockRatio: { actual: actualTotals.stockRatio, target: targetTotals.stockRatio },
+      },
+      primaryKey: "stockRatio",
+    });
+  }
+
+  const trendRange = defaultPeriodRange(forecast.months, boundaryMonth);
+  renderPeriodRangePicker(document.getElementById("trendPeriodPicker"), {
+    months: forecast.months, defaultStart: trendRange.start, defaultEnd: trendRange.end,
+    onChange: renderTrendSection,
   });
-  renderToggleTable(document.getElementById("stockRatioTrendTable"), {
-    months: forecast.months,
-    columns: [{ label: "ストック比率", values: monthlyTotals.map((t) => t.stockRatio), formatValue: fmtPct }],
-  });
+  renderTrendSection(trendRange.start, trendRange.end);
 
   const ranked = companyList
     .map((c) => ({ ...c, sales: c.monthly[refMonth]?.sales || 0 }))
