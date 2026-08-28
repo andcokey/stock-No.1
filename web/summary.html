@@ -252,7 +252,10 @@ async function main() {
     });
   }
 
-  let currentPeriod = { type: "month", value: refMonth };
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const initialPeriodMonth = forecast.months.includes(currentMonth) ? currentMonth : refMonth;
+  let currentPeriod = { type: "month", value: initialPeriodMonth };
   renderPointPeriodPicker(document.getElementById("refPeriodPicker"), {
     months: forecast.months, defaultPeriod: currentPeriod,
     onChange: (period) => { currentPeriod = period; renderTopSection(period); },
