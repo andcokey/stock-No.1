@@ -79,6 +79,10 @@ h1{font-size:20px; font-weight:700; margin:0; letter-spacing:.01em;}
 .kpi-diff{font-size:12px; margin-top:6px; font-weight:600;}
 .kpi-diff.pos{color:var(--good);}
 .kpi-diff.neg{color:var(--bad);}
+.kpi-diff.week{opacity:.75;}
+
+.kpi-hoverable{cursor:help;}
+.kpi-hoverable .kpi-label{border-bottom:1px dotted var(--ink-muted); display:inline-block;}
 
 .mid-row{display:grid; grid-template-columns:1.3fr 1fr; gap:14px; margin-bottom:22px;}
 @media (max-width:900px){.mid-row{grid-template-columns:1fr;}}
@@ -238,6 +242,16 @@ footer.note{margin-top:30px; font-size:11.5px; color:var(--ink-muted); line-heig
 .chart-tooltip .tt-key{display:inline-block; width:10px; height:2px; border-radius:1px; flex:none;}
 .chart-tooltip .tt-label{color:var(--ink-muted);}
 .chart-tooltip .tt-value{font-weight:700; color:var(--ink); margin-left:auto; font-variant-numeric:tabular-nums;}
+
+.chart-tooltip.variance-tooltip{min-width:360px; max-width:440px;}
+.chart-tooltip.variance-tooltip .tt-sub{margin-top:8px; margin-bottom:4px; white-space:normal;}
+.chart-tooltip.variance-tooltip .tt-sub:first-of-type{margin-top:0;}
+.tt-varitable{width:100%; border-collapse:collapse; font-size:11px;}
+.tt-varitable th{text-align:left; color:var(--ink-muted); font-weight:600; padding:2px 6px 4px 0; border-bottom:1px solid var(--border); white-space:nowrap;}
+.tt-varitable td{padding:3px 6px 3px 0; white-space:nowrap; max-width:130px; overflow:hidden; text-overflow:ellipsis;}
+.tt-varitable td.num{text-align:right; font-variant-numeric:tabular-nums; font-weight:600;}
+.tt-varitable td.num.pos{color:var(--good);}
+.tt-varitable td.num.neg{color:var(--bad);}
 
 .chart-legend{display:flex; gap:14px; flex-wrap:wrap; margin-top:8px; font-size:11.5px; color:var(--ink-2);}
 .chart-legend .lg-item{display:flex; align-items:center; gap:6px;}

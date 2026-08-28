@@ -56,8 +56,9 @@ GitHub の Settings → Developer settings → Personal access tokens で発行�
 3. プレビューで内容を確認（会社数・商材数・当月の売上高等）
 4. 合言葉を入力して「保存」→ GAS経由でGitHubにコミットされ、数分後にPagesへ反映される
 
-GASが未設定の場合は「暗号化JSONをダウンロード」で `sync/forecast-latest.enc.json` を手動作成し、
-`sync/forecast-<snapshotDate>.enc.json` としてもコピーしてcommit&pushしてください。
+GASが未設定の場合は「暗号化JSONをダウンロード」で `sync/forecast-latest.enc.json` と
+`sync/forecast-<snapshotDate>.enc.json` の2つが同時にダウンロードされるので、両方をsync/配下に配置してcommit&pushしてください
+（日付付きファイルは全体サマリーの前週差異表示に使われるため、どちらも必須）。
 
 ### 年次（目標更新時）
 
@@ -71,5 +72,7 @@ GASが未設定の場合は「暗号化JSONをダウンロード」で `sync/for
 ## 既知の制約・今後の課題
 
 - 902相当の成長ステージ分類は「顧客継続率（新規）≧75%」「顧客増加数>0」の2軸のみで決まる（元Excelの数式で確認済み。売上高前年同月増加量は参考値であり分類には使われない）
-- 現時点では直近スナップショットのみを表示（`sync/forecast-latest.enc.json`）。週次履歴を蓄積する `sync/forecast-YYYYMMDD.enc.json` は書き出し済みなので、トレンド表示は今後の拡張で対応可能
+- 全体サマリー冒頭（売上高・ストック売上額・ストック比率）の前週差異は、GitHub Contents API（無認証・Publicリポジトリ前提）で
+  `sync/` 内の日付付きスナップショット一覧を取得し、直近の1つ前の日付のファイルと比較して算出している
+  （ディレクトリ一覧を取得できないGitHub Pages配信の制約への対応。日付付きファイルが無い＝前週分がない場合はバッジ非表示になる正常系）
 - 商材集計テンプレートの列位置はヘッダー行のラベル文字列から動的に検出しているが、全50ファイルでの実データ検証はまだ行っていない（手元にあった2社分のファイルでのみ検証済み）

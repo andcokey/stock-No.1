@@ -127,7 +127,7 @@ function getSharedTooltip() {
   }
   return sharedTip;
 }
-function showSharedTooltip(clientX, clientY, build) {
+export function showSharedTooltip(clientX, clientY, build) {
   const tip = getSharedTooltip();
   clearChildren(tip);
   build(tip);
@@ -141,7 +141,7 @@ function showSharedTooltip(clientX, clientY, build) {
   tip.style.left = x + "px";
   tip.style.top = y + "px";
 }
-function hideSharedTooltip() {
+export function hideSharedTooltip() {
   if (sharedTip) sharedTip.classList.remove("show");
 }
 

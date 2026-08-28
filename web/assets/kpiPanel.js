@@ -108,6 +108,51 @@ export function renderPeriodRangePicker(container, { months, defaultStart, defau
 }
 
 /**
+ * 表示基準（単月 or 年間合計）を選ぶ単一セレクト。全体サマリー冒頭のタイル・ランキングの基準切替に使う
+ * （期間の範囲ではなく1点を選ぶ点で renderPeriodRangePicker とは役割が異なる）。
+ * period: {type:"month", value:"YYYY-MM"} または {type:"year", value:"YYYY"}。onChange(period) を呼ぶ。
+ */
+export function renderPointPeriodPicker(container, { months, defaultPeriod, onChange }) {
+  const years = [...new Set(months.map((m) => m.slice(0, 4)))];
+  const sel = document.createElement("select");
+
+  const monthGroup = document.createElement("optgroup");
+  monthGroup.label = "単月";
+  months.forEach((m) => {
+    const o = document.createElement("option");
+    o.value = `m:${m}`;
+    o.textContent = formatMonthOption(m);
+    monthGroup.appendChild(o);
+  });
+  sel.appendChild(monthGroup);
+
+  const yearGroup = document.createElement("optgroup");
+  yearGroup.label = "年間合計";
+  years.forEach((y) => {
+    const o = document.createElement("option");
+    o.value = `y:${y}`;
+    o.textContent = `${y}年（年間合計）`;
+    yearGroup.appendChild(o);
+  });
+  sel.appendChild(yearGroup);
+
+  sel.value = defaultPeriod.type === "year" ? `y:${defaultPeriod.value}` : `m:${defaultPeriod.value}`;
+
+  sel.addEventListener("change", () => {
+    const [type, value] = sel.value.split(":");
+    onChange(type === "y" ? { type: "year", value } : { type: "month", value });
+  });
+
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "range-picker";
+  const label = document.createElement("span");
+  label.textContent = "表示基準:";
+  wrap.append(label, sel);
+  container.appendChild(wrap);
+}
+
+/**
  * KPIごとの目標比較グラフをグリッド表示する。kpis: {key,label,unit}[]（対象外KPIは呼び出し側で除外済みのもの）。
  * seriesByKey: {[key]: {target:number[], actual:number[]}}（monthsと同じ長さ・並び順）。
  * 各カードに「表示範囲: 最小/最大」入力を付け、指標ごとに個別にY軸レンジを固定できるようにする（省略時は自動スケール）。

@@ -437,8 +437,12 @@ document.getElementById("downloadForecastBtn").addEventListener("click", async (
   if (!mergedForecast) return;
   const snapshot = buildForecastSnapshot();
   const { enc } = await saveEncrypted(snapshot, "forecast-latest.enc.json");
+  const datedName = `forecast-${snapshot.snapshotDate}.enc.json`;
+  // 前週差異（全体サマリー）はsync/内の日付付きスナップショットの履歴を見て前週分を探すため、
+  // GAS未デプロイの手動運用でも-latestと同じ内容の日付付きファイルを必ず一緒に配置する。
   downloadJson(enc, "forecast-latest.enc.json");
-  toast("ダウンロードしました。sync/forecast-latest.enc.json に配置してcommit&pushしてください");
+  downloadJson(enc, datedName);
+  toast(`ダウンロードしました。sync/forecast-latest.enc.json と sync/${datedName} の両方をsync/配下に配置してcommit&pushしてください（前週差異の表示に必要です）`);
 });
 
 /* ---------------- 年次：目標ファイル ---------------- */

@@ -19,6 +19,7 @@
         <h1>全体サマリー</h1>
         <div class="subtitle" id="snapshotInfo"></div>
       </div>
+      <div id="refPeriodPicker"></div>
     </header>
 
     <div id="emptyState" class="empty-state" style="display:none;">
@@ -76,10 +77,16 @@
 </div>
 
 <script type="module">
-import { loadSnapshots } from "./assets/data-client.js";
-import { companySummary, classifyProducts, QUADRANT_MAP, KPI_DEFS, groupKpiTable, kpiSeries } from "./lib/aggregate.mjs";
-import { renderQuadrantScatter } from "./assets/charts.js";
-import { renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange } from "./assets/kpiPanel.js";
+import { loadSnapshots, loadPreviousForecast } from "./assets/data-client.js";
+import {
+  companySummary, classifyProducts, QUADRANT_MAP, KPI_DEFS, groupKpiTable, kpiSeries,
+  METRIC, periodMonths, periodLabel, groupTotalsForPeriod, companySalesForPeriod, productVarianceForPeriod,
+} from "./lib/aggregate.mjs";
+import { renderQuadrantScatter, showSharedTooltip, hideSharedTooltip } from "./assets/charts.js";
+import {
+  renderKpiTable, renderPeriodRangePicker, renderPointPeriodPicker, renderKpiChartGrid,
+  kpiSeriesHasData, defaultPeriodRange,
+} from "./assets/kpiPanel.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
 const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
@@ -117,45 +124,140 @@ async function main() {
   const refMonth = pickReferenceMonth(forecast.months, boundaryMonth);
   document.getElementById("snapshotInfo").textContent =
     `スナップショット日: ${forecast.snapshotDate || "-"} ／ 表示基準月: ${refMonth}`;
-  document.getElementById("rankMonthLabel").textContent = `(${refMonth})`;
 
   const summary = companySummary(forecast);
   const companyList = Object.values(summary);
 
-  let totalSales = 0, totalStock = 0;
-  for (const c of companyList) {
-    const m = c.monthly[refMonth] || {};
-    totalSales += m.sales || 0;
-    totalStock += m.stockSales || 0;
-  }
-  const stockRatio = totalSales ? totalStock / totalSales : null;
+  // 前週差異用: 直近の1つ前の日付スナップショットを取得（無ければ以降のバッジは非表示になる正常系）。
+  const prevForecast = await loadPreviousForecast(forecast.snapshotDate);
 
-  // 目標データがあれば、主要3タイルに対目標差異バッジを添える（このダッシュボードの最大の改善要望）。
-  // 売上高・ストック売上額・ストック比率は既存のcompanySummary（会社サマリー行優先・商材合算フォールバック）と
-  // 同じ計算方法を使い、タイルの数値本体と差異バッジの間で計算方法がずれないようにする。
-  let salesDiffBadge = "", stockDiffBadge = "", ratioDiffBadge = "";
-  if (target) {
-    const targetSummary = companySummary(target);
-    let targetSales = 0, targetStock = 0;
-    for (const c of Object.values(targetSummary)) {
-      const m = c.monthly[refMonth] || {};
-      targetSales += m.sales || 0;
-      targetStock += m.stockSales || 0;
+  function diffOf(a, b) {
+    return a == null || b == null ? null : a - b;
+  }
+
+  function diffBadge(cls, fmt, prefix, value) {
+    if (value == null) return "";
+    const sign = value > 0 ? "pos" : value < 0 ? "neg" : "";
+    return `<div class="kpi-diff ${cls} ${sign}">${prefix} ${fmt(value)}</div>`;
+  }
+
+  // 商材ごとの目標差異TOP5/WORST5ツールチップ（売上高・ストック売上額タイルのみ）。
+  function attachVarianceTooltip(el, { metric, valueLabel, months, title }) {
+    const rows = productVarianceForPeriod(forecast, target, metric, months);
+    const sorted = [...rows].sort((a, b) => b.diff - a.diff);
+    const top5 = sorted.slice(0, 5);
+    const worst5 = sorted.slice(-5).reverse();
+
+    function renderRows(list) {
+      if (!list.length) return `<tr><td colspan="4">データなし</td></tr>`;
+      return list.map((r) => `
+        <tr>
+          <td>${r.productName}</td>
+          <td>${r.companyName}</td>
+          <td class="num">${fmtYen(r.actual)}</td>
+          <td class="num ${r.diff > 0 ? "pos" : r.diff < 0 ? "neg" : ""}">${fmtDiffYen(r.diff)}</td>
+        </tr>`).join("");
     }
-    const targetRatio = targetSales ? targetStock / targetSales : null;
-    const salesDiff = totalSales - targetSales, stockDiff = totalStock - targetStock;
-    const ratioDiff = stockRatio != null && targetRatio != null ? stockRatio - targetRatio : null;
-    salesDiffBadge = `<div class="kpi-diff ${salesDiff > 0 ? "pos" : salesDiff < 0 ? "neg" : ""}">対目標 ${fmtDiffYen(salesDiff)}</div>`;
-    stockDiffBadge = `<div class="kpi-diff ${stockDiff > 0 ? "pos" : stockDiff < 0 ? "neg" : ""}">対目標 ${fmtDiffYen(stockDiff)}</div>`;
-    ratioDiffBadge = `<div class="kpi-diff ${ratioDiff > 0 ? "pos" : ratioDiff < 0 ? "neg" : ""}">対目標 ${fmtDiffPct(ratioDiff)}</div>`;
+
+    function section(tip, label, list) {
+      const head = document.createElement("div");
+      head.className = "tt-sub";
+      head.textContent = label;
+      tip.appendChild(head);
+      const table = document.createElement("table");
+      table.className = "tt-varitable";
+      table.innerHTML = `
+        <thead><tr><th>商材名</th><th>会社名</th><th>${valueLabel}</th><th>目標差異</th></tr></thead>
+        <tbody>${renderRows(list)}</tbody>
+      `;
+      tip.appendChild(table);
+    }
+
+    function show(e) {
+      showSharedTooltip(e.clientX, e.clientY, (tip) => {
+        tip.classList.add("variance-tooltip");
+        const titleEl = document.createElement("div");
+        titleEl.className = "tt-title";
+        titleEl.textContent = title;
+        tip.appendChild(titleEl);
+        section(tip, "目標差異 TOP5", top5);
+        section(tip, "目標差異 WORST5", worst5);
+      });
+    }
+    function hide() {
+      hideSharedTooltip();
+    }
+    el.addEventListener("pointerenter", show);
+    el.addEventListener("pointermove", show);
+    el.addEventListener("pointerleave", hide);
   }
 
-  document.getElementById("kpiRow").innerHTML = `
-    <div class="card"><div class="kpi-label">売上高（千円）</div><div class="kpi-value">${fmtYen(totalSales)}</div>${salesDiffBadge}</div>
-    <div class="card"><div class="kpi-label">ストック売上額（千円）</div><div class="kpi-value">${fmtYen(totalStock)}</div>${stockDiffBadge}</div>
-    <div class="card"><div class="kpi-label">ストック比率</div><div class="kpi-value">${fmtPct(stockRatio)}</div>${ratioDiffBadge}</div>
-    <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companyList.length}<small>社</small></div></div>
-  `;
+  // 全体サマリー冒頭（売上高・ストック売上額・ストック比率・ランキング）を表示基準（単月/年間合計）で描く。
+  // 対目標・前週差異は既存のcompanySummary/groupTotalsForPeriodと同じ計算方法を使い、
+  // タイルの数値本体とバッジの間で計算方法がずれないようにする。
+  function renderTopSection(period) {
+    const months = periodMonths(forecast.months, period);
+    const actualTotals = groupTotalsForPeriod(forecast, period);
+    const targetTotals = groupTotalsForPeriod(target, period);
+    const prevTotals = groupTotalsForPeriod(prevForecast, period);
+
+    const salesBadges =
+      diffBadge("target", fmtDiffYen, "対目標", diffOf(actualTotals.sales, targetTotals.sales)) +
+      diffBadge("week", fmtDiffYen, "前週比", diffOf(actualTotals.sales, prevTotals.sales));
+    const stockBadges =
+      diffBadge("target", fmtDiffYen, "対目標", diffOf(actualTotals.stockSales, targetTotals.stockSales)) +
+      diffBadge("week", fmtDiffYen, "前週比", diffOf(actualTotals.stockSales, prevTotals.stockSales));
+    const ratioBadges =
+      diffBadge("target", fmtDiffPct, "対目標", diffOf(actualTotals.stockRatio, targetTotals.stockRatio)) +
+      diffBadge("week", fmtDiffPct, "前週比", diffOf(actualTotals.stockRatio, prevTotals.stockRatio));
+
+    document.getElementById("kpiRow").innerHTML = `
+      <div class="card${target ? " kpi-hoverable" : ""}" id="tileSales"><div class="kpi-label">売上高（千円）</div><div class="kpi-value">${fmtYen(actualTotals.sales)}</div>${salesBadges}</div>
+      <div class="card${target ? " kpi-hoverable" : ""}" id="tileStock"><div class="kpi-label">ストック売上額（千円）</div><div class="kpi-value">${fmtYen(actualTotals.stockSales)}</div>${stockBadges}</div>
+      <div class="card"><div class="kpi-label">ストック比率</div><div class="kpi-value">${fmtPct(actualTotals.stockRatio)}</div>${ratioBadges}</div>
+      <div class="card"><div class="kpi-label">取り込み会社数</div><div class="kpi-value">${companyList.length}<small>社</small></div></div>
+    `;
+
+    if (target) {
+      attachVarianceTooltip(document.getElementById("tileSales"), {
+        metric: METRIC.SALES, valueLabel: "売上高",
+        months, title: `売上高 目標差異ランキング（${periodLabel(period)}）`,
+      });
+      attachVarianceTooltip(document.getElementById("tileStock"), {
+        metric: METRIC.STOCK_SALES, valueLabel: "ストック売上額",
+        months, title: `ストック売上額 目標差異ランキング（${periodLabel(period)}）`,
+      });
+    }
+
+    document.getElementById("rankMonthLabel").textContent = `(${periodLabel(period)})`;
+    const ranked = companyList
+      .map((c) => ({ ...c, sales: companySalesForPeriod(c, period, forecast.months) }))
+      .sort((a, b) => b.sales - a.sales)
+      .slice(0, 12);
+    const maxSales = ranked[0]?.sales || 1;
+    document.getElementById("rankList").innerHTML = ranked.map((c, i) => `
+      <a class="rankrow" href="#" data-code="${c.code}">
+        <span class="idx">${i + 1}</span>
+        <span class="name">${c.name}</span>
+        <span class="bartrack"><span class="barfill" style="width:${(c.sales / maxSales * 100).toFixed(1)}%"></span></span>
+        <span class="amt">${fmtYen(c.sales)}</span>
+      </a>
+    `).join("") || `<div class="empty-state">データがありません</div>`;
+
+    document.querySelectorAll(".rankrow").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        parent.postMessage({ type: "open-company", code: el.dataset.code }, "*");
+      });
+    });
+  }
+
+  let currentPeriod = { type: "month", value: refMonth };
+  renderPointPeriodPicker(document.getElementById("refPeriodPicker"), {
+    months: forecast.months, defaultPeriod: currentPeriod,
+    onChange: (period) => { currentPeriod = period; renderTopSection(period); },
+  });
+  renderTopSection(currentPeriod);
 
   // 全社合計の月次トレンド（売上高・ストック比率）。下部の全社KPI一覧と同じ
   // 「目標(破線)・実績/見通(実線)」比較グラフ＋期間/Y軸レンジ選択を、この上部サマリーにも適用する。
@@ -204,27 +306,6 @@ async function main() {
     onChange: renderTrendSection,
   });
   renderTrendSection(trendRange.start, trendRange.end);
-
-  const ranked = companyList
-    .map((c) => ({ ...c, sales: c.monthly[refMonth]?.sales || 0 }))
-    .sort((a, b) => b.sales - a.sales)
-    .slice(0, 12);
-  const maxSales = ranked[0]?.sales || 1;
-  document.getElementById("rankList").innerHTML = ranked.map((c, i) => `
-    <a class="rankrow" href="#" data-code="${c.code}">
-      <span class="idx">${i + 1}</span>
-      <span class="name">${c.name}</span>
-      <span class="bartrack"><span class="barfill" style="width:${(c.sales / maxSales * 100).toFixed(1)}%"></span></span>
-      <span class="amt">${fmtYen(c.sales)}</span>
-    </a>
-  `).join("") || `<div class="empty-state">データがありません</div>`;
-
-  document.querySelectorAll(".rankrow").forEach((el) => {
-    el.addEventListener("click", (e) => {
-      e.preventDefault();
-      parent.postMessage({ type: "open-company", code: el.dataset.code }, "*");
-    });
-  });
 
   const quadrants = classifyProducts(forecast, { boundaryMonth });
   const counts = { 順調成長: 0, 積上純増: 0, ジレンマ: 0, 要改善: 0 };
