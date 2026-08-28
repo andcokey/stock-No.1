@@ -123,7 +123,7 @@ async function main() {
   const boundaryMonth = forecast.boundaryMonth || forecast.months.at(-12) || forecast.months.at(-1);
   const refMonth = pickReferenceMonth(forecast.months, boundaryMonth);
   document.getElementById("snapshotInfo").textContent =
-    `スナップショット日: ${forecast.snapshotDate || "-"} ／ 表示基準月: ${refMonth}`;
+    `スナップショット日: ${forecast.snapshotDate || "-"} ;
 
   const summary = companySummary(forecast);
   const companyList = Object.values(summary);
