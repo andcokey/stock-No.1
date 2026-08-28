@@ -15,7 +15,7 @@
     </div>
     <div id="content" style="display:none;">
       <div class="filterbar">
-        <input class="search-input" id="searchInput" placeholder="会社名・商材名で検索" autocomplete="off" />
+        <input class="search-input" id="searchInput" placeholder="会社名・商材名で検索" autocomplete="new-password" />
         <div class="filtergroup" id="quadChips"></div>
         <span class="resetlink" id="resetLink">絞り込みを解除</span>
       </div>
@@ -78,9 +78,10 @@ const ALL_KPIS = [
   ...KPI_DEFS.map((k) => ({ key: k.key, label: k.label, unit: k.unit })),
 ];
 
-// ブラウザの自動入力がautocomplete="off"でも過去の値（別画面のGAS URL欄等）を復元し、
-// 検索結果が0件に固定されてしまうことがあるため、実際のキー入力/貼り付けを
-// 伴わないinputイベント（＝自動入力由来）は無視して値をクリアする。
+// autocomplete="off"はChromeの「このフィールドに過去入力した値」の自動入力（別画面のGAS URL欄等を
+// 誤って提案してくる）を止めきれないため、autocomplete="new-password"（保存も提案も一切行われない
+// 特別扱いの値）を使って提案自体を発生させない。さらに、万一何らかの経路で値が書き換わっても
+// 実際のキー入力/貼り付けを伴わないinputイベントは無視して値を戻す保険をかけておく。
 function attachSearchGuard(input, onChange) {
   let userEdited = false;
   input.addEventListener("keydown", () => { userEdited = true; });
