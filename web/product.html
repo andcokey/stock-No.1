@@ -78,20 +78,25 @@ const ALL_KPIS = [
   ...KPI_DEFS.map((k) => ({ key: k.key, label: k.label, unit: k.unit })),
 ];
 
-// autocomplete="off"はChromeの「このフィールドに過去入力した値」の自動入力（別画面のGAS URL欄等を
-// 誤って提案してくる）を止めきれないため、autocomplete="new-password"（保存も提案も一切行われない
-// 特別扱いの値）を使って提案自体を発生させない。さらに、万一何らかの経路で値が書き換わっても
-// 実際のキー入力/貼り付けを伴わないinputイベントは無視して値を戻す保険をかけておく。
+// Chromeの「このフィールドへの過去の入力値」の自動入力（別画面のGAS URL欄の値等を誤って
+// 提案してくる）は、autocomplete="off"/"new-password"のどちらでも止めきれず、しかも1回の
+// キー操作で数十文字の値を丸ごと差し込む・isTrusted:trueの本物のイベントとして発火するため、
+// キー入力/貼り付けの有無では自動入力由来かを判定できない（実機で確認済み）。
+// 人間が1回のキー操作/IME確定で増やせる文字数を超える急激な増加は自動入力由来とみなし、
+// 貼り付け（paste）でない限り元の値に戻す。
 function attachSearchGuard(input, onChange) {
-  let userEdited = false;
-  input.addEventListener("keydown", () => { userEdited = true; });
-  input.addEventListener("paste", () => { userEdited = true; });
+  let lastGoodValue = "";
+  let pasted = false;
+  input.addEventListener("paste", () => { pasted = true; });
   input.addEventListener("input", (e) => {
-    if (!userEdited) {
-      e.target.value = "";
+    const v = e.target.value;
+    if (!pasted && v.length - lastGoodValue.length > 20) {
+      e.target.value = lastGoodValue;
       return;
     }
-    onChange(e.target.value);
+    pasted = false;
+    lastGoodValue = v;
+    onChange(v);
   });
 }
 
