@@ -185,7 +185,11 @@ export function parseCompanySheet(rows, productMaster = null) {
     const legalName = typeof row[col.legalName] === "string" ? row[col.legalName].trim() : "";
     const company = ensureCompany(companyCode, legalName || null);
 
-    const masterId = productMaster?.byCompanyAndName[companyCode]?.[productName];
+    // 商材名の前後空白ゆれ（同じ商材なのに全角スペース等が付いて別名扱いになる）を吸収してマスタと突き合わせる。
+    const productNameTrimmed = typeof productName === "string" ? productName.trim() : productName;
+    const masterId = productMaster?.byCompanyAndName[companyCode]?.[productName]
+      ?? productMaster?.byCompanyAndName[companyCode]?.[productNameTrimmed];
+    const numericProductNo = Number(rawProductNo);
     let key, productNo;
     if (masterId != null) {
       // マスタ（商材一覧）に載っている商材はそちらのIDを正本として使う。
@@ -193,8 +197,10 @@ export function parseCompanySheet(rows, productMaster = null) {
       productNo = masterId;
       key = String(productNo);
       if (!company.products[key]) productMasterStats.matched++;
-    } else if (rawProductNo != null && rawProductNo !== "") {
-      productNo = Number(rawProductNo);
+    } else if (rawProductNo != null && rawProductNo !== "" && Number.isFinite(numericProductNo)) {
+      // Number.isFinite() で "#ERROR!" 等の壊れた数式結果（Number()がNaNを返す）を弾く。
+      // 弾かずに通すとNaNがJSON化時にnullへ化け、目標/見通で商材IDが噛み合わなくなる事故が実際に発生した。
+      productNo = numericProductNo;
       key = String(productNo);
     } else {
       key = `name:${productName}`;
