@@ -12,6 +12,28 @@
   <header class="page-head"><h1>インポート</h1></header>
 
   <div class="card" style="margin-bottom:22px;">
+    <h2>商材マスタ（商材名↔ID紐付け、任意）</h2>
+    <p class="subtitle" id="lastImportInfoProductMaster">現在の商材マスタの最終インポート日を確認中…</p>
+    <p class="subtitle" style="margin-bottom:12px;">
+      「商材一覧」シート（通し番号／DIVACODE／商材・事業名の列がある集計シート、例: 901_ストック強化_集計シート）を
+      アップロードしてください。設定すると、見通管理・目標ファイルの商材IDをこのマスタの通し番号に揃えます
+      （商材番号列が空欄の会社でも、会社をまたいで一意な商材IDが付くようになります）。未設定でも週次・年次インポートは通常通り使えます。
+    </p>
+    <div class="dropzone" id="dropzoneProductMaster">
+      ここに商材マスタファイル（xlsx/xlsm）をドラッグ&ドロップ、またはクリックして選択
+      <input type="file" id="fileInputProductMaster" accept=".xlsx,.xlsm" />
+    </div>
+    <div class="filelist" id="fileListProductMaster"></div>
+    <div id="productMasterPreview" style="display:none; margin-top:16px;">
+      <div class="kpi-row" id="productMasterKpi"></div>
+      <div class="headlinks" style="margin-top:14px;">
+        <button id="saveProductMasterBtn">保存（GAS経由でコミット）</button>
+        <button id="downloadProductMasterBtn">暗号化JSONをダウンロード（手動配置用）</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:22px;">
     <h2>週次：見通管理ファイル（会社別、複数可）</h2>
     <p class="subtitle" id="lastImportInfo">現在のデータの最終インポート日を確認中…</p>
     <div class="dropzone" id="dropzoneForecast">
@@ -31,6 +53,7 @@
       <input type="file" id="fileInputForecastFolder" webkitdirectory multiple />
     </div>
     <div class="filelist" id="fileListForecast"></div>
+    <p class="subtitle" id="forecastMasterStats" style="display:none;"></p>
     <div id="forecastGuardrail" class="guardrail" style="display:none;"></div>
     <div id="forecastPreview" style="display:none; margin-top:16px;">
       <div class="filterbar">
@@ -70,6 +93,7 @@
       <input type="file" id="fileInputTargetFolder" webkitdirectory multiple />
     </div>
     <div class="filelist" id="fileListTarget"></div>
+    <p class="subtitle" id="targetMasterStats" style="display:none;"></p>
     <div id="targetGuardrail" class="guardrail" style="display:none;"></div>
     <div id="targetPreview" style="display:none; margin-top:16px;">
       <div class="kpi-row" id="targetKpi"></div>
@@ -114,9 +138,9 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { parseCompanySheet, mergeParsed } from "./lib/parseCompanySheet.mjs";
+import { parseCompanySheet, mergeParsed, parseProductMaster } from "./lib/parseCompanySheet.mjs";
 import { companySummary, classifyProducts } from "./lib/aggregate.mjs";
-import { encryptJson, getPass, setPass, askPassphrase } from "./assets/crypto-client.js";
+import { encryptJson, getPass, setPass, askPassphrase, resolveEncrypted } from "./assets/crypto-client.js";
 import { loadSnapshots } from "./assets/data-client.js";
 
 const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
@@ -151,10 +175,19 @@ async function getPassphrase() {
 // 取得できなければnull＝基準なし（初回インポート等）扱いにする。
 let previousForecastCompanyCount = null;
 let previousTargetCompanyCount = null;
+// 商材一覧マスタ（設定されていれば、見通・目標インポート時の商材ID解決に使う）。
+let productMaster = null;
+
+async function fetchProductMasterSnapshot() {
+  const res = await fetch("sync/product-master-latest.enc.json", { cache: "no-store" });
+  if (!res.ok) return null;
+  return resolveEncrypted(await res.json());
+}
 
 (async () => {
   const forecastInfoEl = document.getElementById("lastImportInfo");
   const targetInfoEl = document.getElementById("lastImportInfoTarget");
+  const masterInfoEl = document.getElementById("lastImportInfoProductMaster");
   try {
     const { forecast, target } = await loadSnapshots();
     if (forecast) previousForecastCompanyCount = Object.keys(forecast.companies).length;
@@ -168,6 +201,18 @@ let previousTargetCompanyCount = null;
   } catch {
     forecastInfoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
     targetInfoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
+  }
+  try {
+    const master = await fetchProductMasterSnapshot();
+    if (master) {
+      productMaster = master;
+      const companyCount = Object.keys(master.byCompanyAndName || {}).length;
+      masterInfoEl.textContent = `現在の商材マスタの最終インポート日: ${master.snapshotDate || "-"}（対象会社数: ${companyCount}）`;
+    } else {
+      masterInfoEl.textContent = "現在の商材マスタ: まだインポートされていません（未設定でも通常インポートは可能です）";
+    }
+  } catch {
+    masterInfoEl.textContent = "現在の商材マスタの最終インポート日: 取得に失敗しました";
   }
 })();
 
@@ -207,7 +252,7 @@ async function importXlsxEntries(entries, { listElId, sheetMatcher, onMerged }) 
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       const sheet = sheetMatcher(wb);
       if (!sheet) throw new Error("対象のシートが見つかりません");
-      const parsed = parseCompanySheet(sheetToRows(sheet));
+      const parsed = parseCompanySheet(sheetToRows(sheet), productMaster);
       const codes = Object.keys(parsed.companies);
       parsedList.push(parsed);
       fileCompanyMap.push({ name: entry.name, codes });
@@ -282,6 +327,20 @@ function renderGuardrail(elId, guardrail, previousCount, buttonIds) {
   });
 }
 
+/** 商材マスタ（商材一覧）による商材ID紐付けの適用状況を表示する。マスタ未設定時は何も表示しない。 */
+function renderProductMasterStats(elId, stats) {
+  const el = document.getElementById(elId);
+  if (!productMaster || !stats) { el.style.display = "none"; return; }
+  const total = stats.matched + stats.unmatched;
+  let text = `商材マスタでID紐付け: ${stats.matched}/${total}件が一致`;
+  if (stats.unmatched > 0) {
+    const sample = stats.unmatchedNames.slice(0, 5).join(" / ");
+    text += `（未掲載 ${stats.unmatched}件は仮ID発行: ${sample}${stats.unmatchedNames.length > 5 ? " …" : ""}）`;
+  }
+  el.textContent = text;
+  el.style.display = "block";
+}
+
 async function saveEncrypted(obj, filename) {
   const pass = await getPassphrase();
   const enc = await encryptJson(obj, pass);
@@ -338,6 +397,7 @@ async function importForecastEntries(entries) {
       document.getElementById("boundaryMonthInput").value = currentMonthKey();
       document.getElementById("snapshotDateInput").value = todayIso();
       renderGuardrail("forecastGuardrail", guardrail, previousForecastCompanyCount, ["saveForecastBtn", "downloadForecastBtn"]);
+      renderProductMasterStats("forecastMasterStats", merged.productMasterStats);
       renderForecastPreview();
     },
   });
@@ -580,6 +640,7 @@ async function importTargetEntries(entries) {
     onMerged: (merged, guardrail) => {
       mergedTarget = merged;
       renderGuardrail("targetGuardrail", guardrail, previousTargetCompanyCount, ["saveTargetBtn", "downloadTargetBtn"]);
+      renderProductMasterStats("targetMasterStats", merged.productMasterStats);
       renderTargetPreview();
     },
   });
@@ -626,6 +687,56 @@ document.getElementById("downloadTargetBtn").addEventListener("click", async () 
   const { enc } = await saveEncrypted(snapshot, "target-latest.enc.json");
   downloadJson(enc, "target-latest.enc.json");
   toast("ダウンロードしました。sync/target-latest.enc.json に配置してcommit&pushしてください");
+});
+
+/* ---------------- 商材マスタ（商材名↔ID紐付け） ---------------- */
+
+let uploadedProductMaster = null;
+
+setupDropzone("dropzoneProductMaster", "fileInputProductMaster", async (files) => {
+  if (!files.length) return;
+  const listEl = document.getElementById("fileListProductMaster");
+  listEl.innerHTML = "";
+  const row = document.createElement("div");
+  listEl.appendChild(row);
+  try {
+    const buf = await files[0].arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    const sheet = findSheet(wb, (n) => n.trim() === "商材一覧");
+    if (!sheet) throw new Error("「商材一覧」シートが見つかりません");
+    const result = parseProductMaster(sheetToRows(sheet));
+    uploadedProductMaster = { snapshotDate: todayIso(), byCompanyAndName: result.byCompanyAndName };
+    productMaster = uploadedProductMaster; // 保存前でも、以降の見通・目標インポートにこのマスタを使う
+    row.className = "ok";
+    row.textContent = `✓ ${files[0].name} → ${Object.keys(result.byCompanyAndName).length}社・${result.entryCount}商材`;
+    document.getElementById("productMasterKpi").innerHTML = `
+      <div class="card"><div class="kpi-label">対象会社数</div><div class="kpi-value">${Object.keys(result.byCompanyAndName).length}</div></div>
+      <div class="card"><div class="kpi-label">商材数</div><div class="kpi-value">${result.entryCount}</div></div>
+    `;
+    document.getElementById("productMasterPreview").style.display = "block";
+  } catch (err) {
+    row.className = "err";
+    row.textContent = `✗ ${files[0].name}: ${err.message}`;
+  }
+});
+
+document.getElementById("saveProductMasterBtn").addEventListener("click", async () => {
+  if (!uploadedProductMaster) return;
+  try {
+    const { enc } = await saveEncrypted(uploadedProductMaster, "product-master-latest.enc.json");
+    await postToGas("saveProductMaster", { snapshotDate: uploadedProductMaster.snapshotDate, data: enc });
+    productMaster = uploadedProductMaster;
+    toast("商材マスタを保存しました（GitHubへコミット済み）");
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+document.getElementById("downloadProductMasterBtn").addEventListener("click", async () => {
+  if (!uploadedProductMaster) return;
+  const { enc } = await saveEncrypted(uploadedProductMaster, "product-master-latest.enc.json");
+  downloadJson(enc, "product-master-latest.enc.json");
+  toast("ダウンロードしました。sync/product-master-latest.enc.json に配置してcommit&pushしてください");
 });
 </script>
 </body>

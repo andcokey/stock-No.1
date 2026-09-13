@@ -69,7 +69,52 @@ function readMonthlyValues(row, months) {
 }
 
 /**
+ * 「商材一覧」マスタシート（901_ストック強化_集計シート等）を解析し、
+ * (会社コード, 商材名) → 通し番号（グループ全体で一意の商材ID）の対応表を作る。
+ * 見通管理ファイル側の「商材番号」列は会社によって空欄運用だったり値が違うことがあるため、
+ * このマスタの通し番号を商材IDの正本として使う（parseCompanySheetのproductMasterに渡す）。
+ */
+function findProductMasterHeaderRow(rows) {
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    if (row.includes("通し番号") && row.includes("DIVACODE") && row.includes("商材・事業名")) return r;
+  }
+  return -1;
+}
+
+export function parseProductMaster(rows) {
+  const headerRowIdx = findProductMasterHeaderRow(rows);
+  if (headerRowIdx === -1) {
+    throw new Error("商材一覧のヘッダー行（通し番号/DIVACODE/商材・事業名）が見つかりませんでした");
+  }
+  const header = rows[headerRowIdx];
+  const idCol = header.indexOf("通し番号");
+  const codeCol = header.indexOf("DIVACODE");
+  const nameCol = header.indexOf("商材・事業名");
+
+  const byCompanyAndName = {}; // { [companyCode]: { [productName]: id } }
+  let entryCount = 0;
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const id = row[idCol];
+    const code = row[codeCol];
+    const name = row[nameCol];
+    if (code == null || code === "" || name == null || name === "" || id == null || id === "") continue;
+    const companyCode = String(code);
+    if (!byCompanyAndName[companyCode]) byCompanyAndName[companyCode] = {};
+    byCompanyAndName[companyCode][name] = Number(id);
+    entryCount++;
+  }
+  return { byCompanyAndName, entryCount };
+}
+
+/**
  * @param {any[][]} rows
+ * @param {{ byCompanyAndName: Record<string, Record<string, number>> } | null} [productMaster]
+ *   parseProductMaster()の結果。渡すと商材IDの解決にこのマスタを最優先で使う（未掲載の商材は
+ *   従来通りファイル自身の商材番号→フォールバックの順で解決する）。
  * @returns {{
  *   months: string[],
  *   companies: Record<string, {
@@ -77,10 +122,11 @@ function readMonthlyValues(row, months) {
  *     totals: Record<string, Record<string, number|null>>,
  *     products: Record<string, { productNo: number, name: string, type: string,
  *       metrics: Record<string, { code: number, label: string, values: Record<string, number|null> }> }>
- *   }>
+ *   }>,
+ *   productMasterStats: { matched: number, unmatched: number, unmatchedNames: string[] }
  * }}
  */
-export function parseCompanySheet(rows) {
+export function parseCompanySheet(rows, productMaster = null) {
   const headerRowIdx = findHeaderRow(rows);
   const col = detectColumns(rows[headerRowIdx]);
   const months = detectMonths(rows[headerRowIdx], col.dateStart);
@@ -113,6 +159,7 @@ export function parseCompanySheet(rows) {
   // 商材番号列を使わず商材名だけで運用している会社（実データで確認済み）向けのフォールバックID発行用。
   // 会社コードごとに連番を振り、実データの商材番号（正の数）と衝突しないよう負数にする。
   const syntheticProductNoCounters = new Map();
+  const productMasterStats = { matched: 0, unmatched: 0, unmatchedNames: [] };
 
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const row = rows[r];
@@ -138,8 +185,15 @@ export function parseCompanySheet(rows) {
     const legalName = typeof row[col.legalName] === "string" ? row[col.legalName].trim() : "";
     const company = ensureCompany(companyCode, legalName || null);
 
+    const masterId = productMaster?.byCompanyAndName[companyCode]?.[productName];
     let key, productNo;
-    if (rawProductNo != null && rawProductNo !== "") {
+    if (masterId != null) {
+      // マスタ（商材一覧）に載っている商材はそちらのIDを正本として使う。
+      // ファイル自身の商材番号が空欄・不一致でも、会社をまたいで一意なIDに揃えられる。
+      productNo = masterId;
+      key = String(productNo);
+      if (!company.products[key]) productMasterStats.matched++;
+    } else if (rawProductNo != null && rawProductNo !== "") {
       productNo = Number(rawProductNo);
       key = String(productNo);
     } else {
@@ -151,6 +205,10 @@ export function parseCompanySheet(rows) {
         syntheticProductNoCounters.set(companyCode, counter);
         productNo = -counter;
       }
+    }
+    if (masterId == null && productMaster && !company.products[key]) {
+      productMasterStats.unmatched++;
+      productMasterStats.unmatchedNames.push(`${companyCode}:${productName}`);
     }
 
     if (!company.products[key]) {
@@ -169,7 +227,12 @@ export function parseCompanySheet(rows) {
     companies[companyCodes[0]].totals = preHeaderTotals;
   }
 
-  return { months: monthKeys, companies, groupTotals: companyCodes.length === 1 ? null : preHeaderTotals };
+  return {
+    months: monthKeys,
+    companies,
+    groupTotals: companyCodes.length === 1 ? null : preHeaderTotals,
+    productMasterStats,
+  };
 }
 
 /**
@@ -180,11 +243,17 @@ export function parseCompanySheet(rows) {
 export function mergeParsed(parsedList) {
   const monthSet = new Set();
   const companies = {};
+  const productMasterStats = { matched: 0, unmatched: 0, unmatchedNames: [] };
   for (const parsed of parsedList) {
     for (const m of parsed.months) monthSet.add(m);
     for (const [code, company] of Object.entries(parsed.companies)) {
       companies[code] = company;
     }
+    if (parsed.productMasterStats) {
+      productMasterStats.matched += parsed.productMasterStats.matched;
+      productMasterStats.unmatched += parsed.productMasterStats.unmatched;
+      productMasterStats.unmatchedNames.push(...parsed.productMasterStats.unmatchedNames);
+    }
   }
-  return { months: [...monthSet].sort(), companies };
+  return { months: [...monthSet].sort(), companies, productMasterStats };
 }

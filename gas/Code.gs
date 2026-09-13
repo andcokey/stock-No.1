@@ -40,6 +40,9 @@ function handle(e) {
       case 'saveTarget':
         result = saveSnapshot('target', params.snapshotDate, params.data);
         break;
+      case 'saveProductMaster':
+        result = saveSnapshot('product-master', params.snapshotDate, params.data);
+        break;
       default:
         return jsonOut({ ok: false, error: '不明なaction: ' + params.action });
     }
