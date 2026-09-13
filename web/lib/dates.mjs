@@ -5,7 +5,10 @@ const EXCEL_EPOCH_UTC = Date.UTC(1899, 11, 30); // Excelのシリアル値0 = 18
 export function toMonthKey(cell) {
   if (cell == null) return null;
   if (cell instanceof Date) {
-    return `${cell.getUTCFullYear()}-${String(cell.getUTCMonth() + 1).padStart(2, "0")}`;
+    // XLSXの cellDates:true はローカルタイムゾーン基準でDateを構築するため、月の取り出しも
+    // ローカル基準（getFullYear/getMonth）で行う。UTC基準で読むとJSTなどUTC+の環境では
+    // 月初セルが前日UTCにずれ込み、月が1つ前にずれてしまう（実際に発生した不具合）。
+    return `${cell.getFullYear()}-${String(cell.getMonth() + 1).padStart(2, "0")}`;
   }
   if (typeof cell === "object" && typeof cell.__date === "string") {
     return cell.__date.slice(0, 7);
