@@ -25,7 +25,13 @@
       クリックして選択
       <input type="file" id="fileInputForecastZip" multiple accept=".zip" />
     </div>
+    <div class="dropzone" id="dropzoneForecastFolder" style="margin-top:10px;">
+      またはフォルダを選択（サブフォルダの中も自動的にすべて探索します。会社ファイルが見つからない場合はこちらをお試しください）<br />
+      クリックしてフォルダを選択
+      <input type="file" id="fileInputForecastFolder" webkitdirectory multiple />
+    </div>
     <div class="filelist" id="fileListForecast"></div>
+    <div id="forecastGuardrail" class="guardrail" style="display:none;"></div>
     <div id="forecastPreview" style="display:none; margin-top:16px;">
       <div class="filterbar">
         <div class="filtergroup">
@@ -58,7 +64,13 @@
       クリックして選択
       <input type="file" id="fileInputTargetZip" multiple accept=".zip" />
     </div>
+    <div class="dropzone" id="dropzoneTargetFolder" style="margin-top:10px;">
+      またはフォルダを選択（サブフォルダの中も自動的にすべて探索します。会社ファイルが見つからない場合はこちらをお試しください）<br />
+      クリックしてフォルダを選択
+      <input type="file" id="fileInputTargetFolder" webkitdirectory multiple />
+    </div>
     <div class="filelist" id="fileListTarget"></div>
+    <div id="targetGuardrail" class="guardrail" style="display:none;"></div>
     <div id="targetPreview" style="display:none; margin-top:16px;">
       <div class="kpi-row" id="targetKpi"></div>
       <div class="headlinks" style="margin-top:14px;">
@@ -135,16 +147,23 @@ async function getPassphrase() {
   return pass;
 }
 
+// 直前に保存済みだったスナップショットの会社数（ガードレールの基準値として使う）。
+// 取得できなければnull＝基準なし（初回インポート等）扱いにする。
+let previousForecastCompanyCount = null;
+let previousTargetCompanyCount = null;
+
 (async () => {
   const forecastInfoEl = document.getElementById("lastImportInfo");
   const targetInfoEl = document.getElementById("lastImportInfoTarget");
   try {
     const { forecast, target } = await loadSnapshots();
+    if (forecast) previousForecastCompanyCount = Object.keys(forecast.companies).length;
+    if (target) previousTargetCompanyCount = Object.keys(target.companies).length;
     forecastInfoEl.textContent = forecast
-      ? `現在のデータの最終インポート日: ${forecast.snapshotDate || "-"}`
+      ? `現在のデータの最終インポート日: ${forecast.snapshotDate || "-"}（会社数: ${previousForecastCompanyCount}）`
       : "現在のデータの最終インポート日: まだインポートされていません";
     targetInfoEl.textContent = target
-      ? `現在のデータの最終インポート日: ${target.snapshotDate || "-"}`
+      ? `現在のデータの最終インポート日: ${target.snapshotDate || "-"}（会社数: ${previousTargetCompanyCount}）`
       : "現在のデータの最終インポート日: まだインポートされていません";
   } catch {
     forecastInfoEl.textContent = "現在のデータの最終インポート日: 取得に失敗しました";
@@ -179,6 +198,7 @@ async function importXlsxEntries(entries, { listElId, sheetMatcher, onMerged }) 
   const listEl = document.getElementById(listElId);
   listEl.innerHTML = "";
   const parsedList = [];
+  const fileCompanyMap = []; // [{ name, codes }] 会社コードの重複（=取り込み時に上書きされて1社消える）検知用
   for (const entry of entries) {
     const row = document.createElement("div");
     listEl.appendChild(row);
@@ -190,6 +210,7 @@ async function importXlsxEntries(entries, { listElId, sheetMatcher, onMerged }) 
       const parsed = parseCompanySheet(sheetToRows(sheet));
       const codes = Object.keys(parsed.companies);
       parsedList.push(parsed);
+      fileCompanyMap.push({ name: entry.name, codes });
       row.className = "ok";
       row.textContent = `✓ ${entry.name} → ${codes.map((c) => parsed.companies[c].name).join(", ")}`;
     } catch (err) {
@@ -198,7 +219,67 @@ async function importXlsxEntries(entries, { listElId, sheetMatcher, onMerged }) 
     }
   }
   if (!parsedList.length) { toast("解析できるファイルがありませんでした", true); return; }
-  onMerged(mergeParsed(parsedList));
+  const merged = mergeParsed(parsedList);
+  onMerged(merged, computeGuardrail(fileCompanyMap, merged));
+}
+
+/**
+ * 会社数のガードレール: 「同じ会社コードが複数ファイルに含まれ、後勝ちで1社分が消える」事故と、
+ * 「前回保存時より会社数が減っている」事故を検知する。どちらも合計金額が黙って減る典型パターン。
+ */
+function computeGuardrail(fileCompanyMap, merged) {
+  const codeToFiles = new Map();
+  for (const f of fileCompanyMap) {
+    for (const code of f.codes) {
+      if (!codeToFiles.has(code)) codeToFiles.set(code, []);
+      codeToFiles.get(code).push(f.name);
+    }
+  }
+  const duplicates = [...codeToFiles]
+    .filter(([, files]) => files.length > 1)
+    .map(([code, files]) => ({ code, name: merged.companies[code]?.name || code, files }));
+  return {
+    fileCount: fileCompanyMap.length,
+    companyCount: Object.keys(merged.companies).length,
+    duplicates,
+  };
+}
+
+/** ガードレール警告を表示し、問題がある間は保存/ダウンロードボタンを（確認チェックが入るまで）無効化する。 */
+function renderGuardrail(elId, guardrail, previousCount, buttonIds) {
+  const el = document.getElementById(elId);
+  const buttons = buttonIds.map((id) => document.getElementById(id));
+  const droppedVsPrevious = previousCount != null && guardrail.companyCount < previousCount;
+  const hasIssue = guardrail.duplicates.length > 0 || droppedVsPrevious;
+
+  if (!hasIssue) {
+    el.style.display = "none";
+    buttons.forEach((b) => (b.disabled = false));
+    return;
+  }
+
+  const parts = [];
+  if (droppedVsPrevious) {
+    parts.push(`<p>前回保存時は${previousCount}社でしたが、今回は${guardrail.companyCount}社しかありません（${previousCount - guardrail.companyCount}社減）。取り込んだファイルが漏れている可能性があります。「フォルダを選択」でサブフォルダも含めて探索するか、不足している会社のファイルを追加してください。</p>`);
+  }
+  if (guardrail.duplicates.length > 0) {
+    const items = guardrail.duplicates
+      .map((d) => `<li>会社コード ${d.code}（${d.name}）: ${d.files.join(" / ")} — 同じ会社コードが複数ファイルにあり、片方が上書きされて消えています</li>`)
+      .join("");
+    parts.push(`<p>会社コードが重複しているファイルがあります（後から処理した方で上書きされ、集計から1社分が欠落します）：</p><ul>${items}</ul>`);
+  }
+
+  const checkboxId = `${elId}Override`;
+  el.innerHTML = `
+    <h4>⚠ 会社数が合いません（合計が実際より少なくなります）</h4>
+    ${parts.join("")}
+    <label><input type="checkbox" id="${checkboxId}" /> 内容を確認しました。このまま保存します</label>
+  `;
+  el.style.display = "block";
+  buttons.forEach((b) => (b.disabled = true));
+  document.getElementById(checkboxId).addEventListener("change", (e) => {
+    buttons.forEach((b) => (b.disabled = !e.target.checked));
+  });
 }
 
 async function saveEncrypted(obj, filename) {
@@ -252,10 +333,11 @@ async function importForecastEntries(entries) {
   await importXlsxEntries(entries, {
     listElId: "fileListForecast",
     sheetMatcher: (wb) => findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計"),
-    onMerged: (merged) => {
+    onMerged: (merged, guardrail) => {
       mergedForecast = merged;
       document.getElementById("boundaryMonthInput").value = currentMonthKey();
       document.getElementById("snapshotDateInput").value = todayIso();
+      renderGuardrail("forecastGuardrail", guardrail, previousForecastCompanyCount, ["saveForecastBtn", "downloadForecastBtn"]);
       renderForecastPreview();
     },
   });
@@ -364,17 +446,42 @@ function openZipSelectOverlay(ambiguousGroups) {
   });
 }
 
-/** ZIPドロップ共通処理: 候補収集→（必要なら）選択モーダル→importFnへ引き渡す。 */
-async function handleZipDrop(files, importFn) {
-  if (!files.length) return;
-  const groups = await collectZipCandidates(files);
-  if (!groups.size) { toast("ZIP内に対象ファイル（xlsx/xlsm）が見つかりませんでした", true); return; }
+/**
+ * フォルダ（サブフォルダ含む）から見つかったxlsx/xlsmを会社フォルダ単位でグルーピングする。
+ * ZIP版のcollectZipCandidates()と同じ考え方: webkitdirectoryで取得したFileListは
+ * サブフォルダの中身もすべてフラットに含まれるため、old/BK等の履歴フォルダ除外・親フォルダ単位の
+ * 重複検出（候補選択）もZIPと同じロジックがそのまま使える。
+ */
+async function collectFolderCandidates(files) {
+  const groups = new Map(); // groupKey -> { label, candidates: [{ name, date, getBuffer }] }
+  for (const file of files) {
+    const rel = file.webkitRelativePath || file.name;
+    if (!/\.(xlsx|xlsm)$/i.test(rel)) continue;
+    const segments = rel.split("/").filter(Boolean);
+    const dirs = segments.slice(0, -1);
+    const parentDir = dirs.at(-1) || "";
+    if (ZIP_EXCLUDE_DIR.test(parentDir)) continue; // old/BK/templateなど過去版フォルダは対象外
+
+    const groupKey = dirs.join("/") || rel;
+    if (!groups.has(groupKey)) groups.set(groupKey, { label: parentDir || rel, candidates: [] });
+    groups.get(groupKey).candidates.push({
+      name: segments.at(-1),
+      date: file.lastModified ? new Date(file.lastModified) : null,
+      getBuffer: () => file.arrayBuffer(),
+    });
+  }
+  return groups;
+}
+
+/** グループ収集後の共通処理: （候補が複数あれば）選択モーダル→importFnへ引き渡す。ZIP・フォルダ選択の両方から使う。 */
+async function handleGroupedCandidates(groups, importFn, { emptyMessage }) {
+  if (!groups.size) { toast(emptyMessage, true); return; }
 
   const ambiguous = new Map([...groups].filter(([, g]) => g.candidates.length > 1));
   let selections;
   if (ambiguous.size) {
     selections = await openZipSelectOverlay(ambiguous);
-    if (!selections) { toast("ZIPの取り込みをキャンセルしました"); return; }
+    if (!selections) { toast("取り込みをキャンセルしました"); return; }
   } else {
     selections = new Map();
   }
@@ -386,7 +493,24 @@ async function handleZipDrop(files, importFn) {
   await importFn(entries);
 }
 
+/** ZIPドロップ共通処理: 候補収集→グループ処理へ引き渡す。 */
+async function handleZipDrop(files, importFn) {
+  if (!files.length) return;
+  const groups = await collectZipCandidates(files);
+  await handleGroupedCandidates(groups, importFn, { emptyMessage: "ZIP内に対象ファイル（xlsx/xlsm）が見つかりませんでした" });
+}
+
+/** フォルダ選択共通処理（サブフォルダも自動探索）: 候補収集→グループ処理へ引き渡す。 */
+async function handleFolderSelect(files, importFn) {
+  if (!files.length) return;
+  const groups = await collectFolderCandidates(files);
+  await handleGroupedCandidates(groups, importFn, { emptyMessage: "フォルダ内に対象ファイル（xlsx/xlsm）が見つかりませんでした" });
+}
+
 setupDropzone("dropzoneForecastZip", "fileInputForecastZip", (files) => handleZipDrop(files, importForecastEntries));
+
+document.getElementById("dropzoneForecastFolder").addEventListener("click", () => document.getElementById("fileInputForecastFolder").click());
+document.getElementById("fileInputForecastFolder").addEventListener("change", (e) => handleFolderSelect([...e.target.files], importForecastEntries));
 
 function renderForecastPreview() {
   const boundaryMonth = document.getElementById("boundaryMonthInput").value || currentMonthKey();
@@ -453,8 +577,9 @@ async function importTargetEntries(entries) {
   await importXlsxEntries(entries, {
     listElId: "fileListTarget",
     sheetMatcher: (wb) => findSheet(wb, (n) => n.trim() === "目標") || findSheet(wb, (n) => n.replace(/\s+$/, "") === "商材集計"),
-    onMerged: (merged) => {
+    onMerged: (merged, guardrail) => {
       mergedTarget = merged;
+      renderGuardrail("targetGuardrail", guardrail, previousTargetCompanyCount, ["saveTargetBtn", "downloadTargetBtn"]);
       renderTargetPreview();
     },
   });
@@ -465,6 +590,9 @@ setupDropzone("dropzoneTarget", "fileInputTarget", (files) => {
 });
 
 setupDropzone("dropzoneTargetZip", "fileInputTargetZip", (files) => handleZipDrop(files, importTargetEntries));
+
+document.getElementById("dropzoneTargetFolder").addEventListener("click", () => document.getElementById("fileInputTargetFolder").click());
+document.getElementById("fileInputTargetFolder").addEventListener("change", (e) => handleFolderSelect([...e.target.files], importTargetEntries));
 
 function renderTargetPreview() {
   const summary = companySummary(mergedTarget);
