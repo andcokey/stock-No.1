@@ -60,12 +60,14 @@
   <button class="shell-tab active" data-tab="summary" id="tabSummary">全体サマリー</button>
   <button class="shell-tab" data-tab="company" id="tabCompany">会社別</button>
   <button class="shell-tab" data-tab="product" id="tabProduct">商材別</button>
+  <button class="shell-tab" data-tab="compare" id="tabCompare">時点比較</button>
   <button class="shell-tab" data-tab="import" id="tabImport">インポート</button>
 </div>
 <div class="shell-body">
   <iframe class="shell-frame active" id="frameSummary" src="summary.html"></iframe>
   <iframe class="shell-frame" id="frameCompany"></iframe>
   <iframe class="shell-frame" id="frameProduct"></iframe>
+  <iframe class="shell-frame" id="frameCompare"></iframe>
   <iframe class="shell-frame" id="frameImport"></iframe>
 </div>
 
@@ -74,16 +76,18 @@ var frames = {
   summary: document.getElementById('frameSummary'),
   company: document.getElementById('frameCompany'),
   product: document.getElementById('frameProduct'),
+  compare: document.getElementById('frameCompare'),
   import: document.getElementById('frameImport'),
 };
 var tabs = {
   summary: document.getElementById('tabSummary'),
   company: document.getElementById('tabCompany'),
   product: document.getElementById('tabProduct'),
+  compare: document.getElementById('tabCompare'),
   import: document.getElementById('tabImport'),
 };
-var loaded = { summary: true, company: false, product: false, import: false };
-var srcMap = { company: 'company.html', product: 'product.html', import: 'import.html' };
+var loaded = { summary: true, company: false, product: false, compare: false, import: false };
+var srcMap = { company: 'company.html', product: 'product.html', compare: 'compare.html', import: 'import.html' };
 
 function activateTab(name){
   Object.keys(tabs).forEach(function(k){

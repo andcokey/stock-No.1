@@ -24,7 +24,7 @@ export async function loadSnapshots() {
 // ファイル一覧を取得し、日付入りスナップショット（forecast-YYYY-MM-DD.enc.json）を検出する。
 const REPO = "andcokey/stock-No.1";
 
-async function listSnapshotDates(domain) {
+export async function listSnapshotDates(domain) {
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/contents/sync`, { cache: "no-store" });
     if (!res.ok) return [];
@@ -33,6 +33,17 @@ async function listSnapshotDates(domain) {
     return files.map((f) => f.name.match(re)?.[1]).filter(Boolean).sort();
   } catch {
     return [];
+  }
+}
+
+/** 指定した日付のforecastスナップショットを1つ読み込む。見つからない場合はnull（時点比較画面で使用）。 */
+export async function loadForecastAt(date) {
+  const raw = await fetchJsonOrNull(`sync/forecast-${date}.enc.json`);
+  if (!raw) return null;
+  try {
+    return await resolveEncrypted(raw);
+  } catch {
+    return null;
   }
 }
 

@@ -36,8 +36,12 @@ export function kpiSeriesHasData(series) {
   return (series?.target ?? []).some((v) => v != null) || (series?.actual ?? []).some((v) => v != null);
 }
 
-/** 目標・実績(見通)・目標差異の3列テーブル。rowsは {key,label,unit,target,actual,diff}[]（既に対象外KPIを除いたもの）。 */
-export function renderKpiTable(container, rows, { primaryKey = "stockRatio" } = {}) {
+/**
+ * 目標・実績(見通)・目標差異の3列テーブル。rowsは {key,label,unit,target,actual,diff}[]（既に対象外KPIを除いたもの）。
+ * headersでカラム見出しを差し替え可能（時点比較画面など「目標/実績」以外の意味で流用する場合に使う）。
+ */
+export function renderKpiTable(container, rows, { primaryKey = "stockRatio", headers, emptyText } = {}) {
+  const h = { target: "目標", actual: "実績/見通", diff: "目標差異", ...headers };
   const body = rows.map((r) => {
     const fmt = formatByUnit(r.unit);
     const diffCls = r.diff > 0 ? "pos" : r.diff < 0 ? "neg" : "";
@@ -53,8 +57,8 @@ export function renderKpiTable(container, rows, { primaryKey = "stockRatio" } = 
 
   container.innerHTML = `
     <table class="datatable">
-      <thead><tr><th>指標</th><th class="num">目標</th><th class="num">実績/見通</th><th class="num">目標差異</th></tr></thead>
-      <tbody>${body || `<tr><td colspan="4" class="empty-state">目標・実績データがありません</td></tr>`}</tbody>
+      <thead><tr><th>指標</th><th class="num">${h.target}</th><th class="num">${h.actual}</th><th class="num">${h.diff}</th></tr></thead>
+      <tbody>${body || `<tr><td colspan="4" class="empty-state">${emptyText || "目標・実績データがありません"}</td></tr>`}</tbody>
     </table>
   `;
 }
@@ -157,7 +161,7 @@ export function renderPointPeriodPicker(container, { months, defaultPeriod, onCh
  * seriesByKey: {[key]: {target:number[], actual:number[]}}（monthsと同じ長さ・並び順）。
  * 各カードに「表示範囲: 最小/最大」入力を付け、指標ごとに個別にY軸レンジを固定できるようにする（省略時は自動スケール）。
  */
-export function renderKpiChartGrid(container, { kpis, months, seriesByKey, primaryKey = "stockRatio" }) {
+export function renderKpiChartGrid(container, { kpis, months, seriesByKey, primaryKey = "stockRatio", actualLabel, targetLabel }) {
   container.innerHTML = "";
   container.classList.add("kpi-chart-grid");
 
@@ -204,7 +208,7 @@ export function renderKpiChartGrid(container, { kpis, months, seriesByKey, prima
       const yMax = maxInput.value === "" ? null : Number(maxInput.value) * scale;
       renderComparisonChart(chartDiv, {
         months, actual: series.actual, target: series.target,
-        yMin, yMax, formatValue: fmt,
+        yMin, yMax, formatValue: fmt, actualLabel, targetLabel,
       });
     }
     minInput.addEventListener("change", redraw);

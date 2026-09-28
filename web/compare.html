@@ -1,0 +1,246 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>見通ダッシュボード — 時点比較</title>
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div id="loadingScreen">読み込み中…</div>
+  <div id="errorScreen">
+    <div>読み込みに失敗しました。</div>
+    <button onclick="location.reload()">再読込</button>
+  </div>
+
+  <div id="appRoot">
+    <header class="page-head">
+      <div>
+        <h1>時点比較</h1>
+        <div class="subtitle">2つのスナップショット日を選んで、見通がどう変化したかを比較します。</div>
+      </div>
+      <div id="datePicker"></div>
+    </header>
+
+    <div id="emptyState" class="empty-state" style="display:none;">
+      比較できるスナップショットが2つ以上ありません。<br />
+      「インポート」タブから週次の見通ファイルを取り込むと、日付付きスナップショットが履歴として蓄積されます。
+    </div>
+
+    <div id="content" style="display:none;">
+      <div class="kpi-row" id="kpiRow"></div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <div class="kpi-section-head">
+          <h2>全社KPI比較（<span id="fromLabel"></span> → <span id="toLabel"></span>） <span class="n" id="kpiTableMonthLabel"></span></h2>
+          <div id="periodPicker"></div>
+        </div>
+        <div class="table-scroll"><div id="groupKpiTable"></div></div>
+        <div id="groupKpiChartGrid"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <h2>会社別 売上高の変化（<span id="fromLabel2"></span> → <span id="toLabel2"></span>） <span class="n" id="rankMonthLabel"></span></h2>
+        <div class="table-scroll"><div id="companyDiffTable"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="unlock-overlay">
+  <div class="unlock-box">
+    <h3>合言葉を入力</h3>
+    <p>このダッシュボードのデータを見るには合言葉が必要です。</p>
+    <input id="unlock-input" type="password" placeholder="合言葉" />
+    <button id="unlock-btn">開く</button>
+    <div id="unlock-error"></div>
+  </div>
+</div>
+
+<script type="module">
+import { listSnapshotDates, loadForecastAt } from "./assets/data-client.js";
+import {
+  companySummary, KPI_DEFS, groupKpiTable, kpiSeries,
+  periodMonths, periodLabel, groupTotalsForPeriod, companySalesForPeriod,
+} from "./lib/aggregate.mjs";
+import {
+  renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange,
+} from "./assets/kpiPanel.js";
+
+const fmtYen = (v) => v == null ? "—" : Math.round(v).toLocaleString("ja-JP");
+const fmtPct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
+const fmtDiffYen = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + Math.round(v).toLocaleString("ja-JP");
+const fmtDiffPct = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "pt";
+
+const ALL_KPIS = [
+  { key: "stockRatio", label: "ストック比率", unit: "percent" },
+  ...KPI_DEFS.map((k) => ({ key: k.key, label: k.label, unit: k.unit })),
+];
+
+function formatDateOption(d) {
+  const [y, m, day] = d.split("-");
+  return `${y}/${Number(m)}/${Number(day)}`;
+}
+
+function renderDatePicker(container, { dates, defaultFrom, defaultTo, onChange }) {
+  const fromSel = document.createElement("select");
+  const toSel = document.createElement("select");
+  dates.forEach((d) => {
+    const label = formatDateOption(d);
+    const o1 = document.createElement("option");
+    o1.value = d; o1.textContent = label;
+    fromSel.appendChild(o1);
+    const o2 = document.createElement("option");
+    o2.value = d; o2.textContent = label;
+    toSel.appendChild(o2);
+  });
+  fromSel.value = defaultFrom;
+  toSel.value = defaultTo;
+
+  function emit() {
+    let f = fromSel.value, t = toSel.value;
+    if (f > t) { [f, t] = [t, f]; fromSel.value = f; toSel.value = t; }
+    onChange(f, t);
+  }
+  fromSel.addEventListener("change", emit);
+  toSel.addEventListener("change", emit);
+
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "range-picker";
+  const label = document.createElement("span");
+  label.textContent = "比較する日付:";
+  const sep = document.createElement("span");
+  sep.className = "sep";
+  sep.textContent = "→";
+  wrap.append(label, fromSel, sep, toSel);
+  container.appendChild(wrap);
+}
+
+async function main() {
+  let dates;
+  try {
+    dates = await listSnapshotDates("forecast");
+  } catch (e) {
+    document.getElementById("loadingScreen").style.display = "none";
+    document.getElementById("errorScreen").style.display = "block";
+    return;
+  }
+  document.getElementById("loadingScreen").style.display = "none";
+
+  if (dates.length < 2) {
+    document.getElementById("emptyState").style.display = "block";
+    document.getElementById("appRoot").style.display = "block";
+    return;
+  }
+
+  const cache = new Map();
+  async function forecastAt(date) {
+    if (!cache.has(date)) cache.set(date, await loadForecastAt(date));
+    return cache.get(date);
+  }
+
+  let fromForecast, toForecast;
+
+  async function render(fromDate, toDate) {
+    [fromForecast, toForecast] = await Promise.all([forecastAt(fromDate), forecastAt(toDate)]);
+    if (!fromForecast || !toForecast) return;
+
+    document.getElementById("fromLabel").textContent = formatDateOption(fromDate);
+    document.getElementById("toLabel").textContent = formatDateOption(toDate);
+    document.getElementById("fromLabel2").textContent = formatDateOption(fromDate);
+    document.getElementById("toLabel2").textContent = formatDateOption(toDate);
+
+    const months = toForecast.months.filter((m) => fromForecast.months.includes(m));
+    const boundaryMonth = toForecast.boundaryMonth || toForecast.months.at(-12) || toForecast.months.at(-1);
+
+    // 冒頭タイル: 直近の年間合計で「見通がどれだけ動いたか」をひと目で見せる。
+    const period = { type: "year", value: boundaryMonth.slice(0, 4) };
+    const fromTotals = groupTotalsForPeriod(fromForecast, period);
+    const toTotals = groupTotalsForPeriod(toForecast, period);
+    document.getElementById("kpiRow").innerHTML = `
+      <div class="card"><div class="kpi-label">売上高（千円・${periodLabel(period)}）</div><div class="kpi-value">${fmtYen(toTotals.sales)}</div>
+        <div class="kpi-diff week ${toTotals.sales - fromTotals.sales > 0 ? "pos" : toTotals.sales - fromTotals.sales < 0 ? "neg" : ""}">変化 ${fmtDiffYen(toTotals.sales == null || fromTotals.sales == null ? null : toTotals.sales - fromTotals.sales)}</div></div>
+      <div class="card"><div class="kpi-label">ストック売上額（千円）</div><div class="kpi-value">${fmtYen(toTotals.stockSales)}</div>
+        <div class="kpi-diff week ${toTotals.stockSales - fromTotals.stockSales > 0 ? "pos" : toTotals.stockSales - fromTotals.stockSales < 0 ? "neg" : ""}">変化 ${fmtDiffYen(toTotals.stockSales == null || fromTotals.stockSales == null ? null : toTotals.stockSales - fromTotals.stockSales)}</div></div>
+      <div class="card"><div class="kpi-label">ストック比率</div><div class="kpi-value">${fmtPct(toTotals.stockRatio)}</div>
+        <div class="kpi-diff week ${(toTotals.stockRatio ?? 0) - (fromTotals.stockRatio ?? 0) > 0 ? "pos" : "neg"}">変化 ${fmtDiffPct(toTotals.stockRatio == null || fromTotals.stockRatio == null ? null : toTotals.stockRatio - fromTotals.stockRatio)}</div></div>
+      <div class="card"><div class="kpi-label">経過日数</div><div class="kpi-value">${Math.round((new Date(toDate) - new Date(fromDate)) / 86400000)}<small>日</small></div></div>
+    `;
+
+    // 全社KPI比較: 既存のgroupKpiTable/kpiSeriesは(actual,target)を突き合わせる関数だが、
+    // ここでは「新しい時点の見通=actual」「古い時点の見通=target」として同じ関数に流用し、
+    // 差分列を「変化量（新→旧）」として表示する（テーブル・グラフの描画コードを新規に書かない）。
+    const availableKpis = ALL_KPIS.filter((k) =>
+      kpiSeriesHasData(kpiSeries(toForecast, fromForecast, { kind: "group" }, k.key, months)));
+    const { start: defStart, end: defEnd } = defaultPeriodRange(months, boundaryMonth);
+
+    function renderGroupKpiSection(start, end) {
+      const rangeMonths = months.filter((m) => m >= start && m <= end);
+      const endMonth = rangeMonths.at(-1) || months.at(-1);
+      document.getElementById("kpiTableMonthLabel").textContent = `(${endMonth}時点)`;
+      const rows = groupKpiTable(toForecast, fromForecast, endMonth)
+        .filter((r) => availableKpis.some((k) => k.key === r.key));
+      renderKpiTable(document.getElementById("groupKpiTable"), rows, {
+        primaryKey: null,
+        headers: { target: formatDateOption(fromDate), actual: formatDateOption(toDate), diff: "変化" },
+        emptyText: "比較できるデータがありません",
+      });
+
+      const seriesByKey = {};
+      for (const k of availableKpis) seriesByKey[k.key] = kpiSeries(toForecast, fromForecast, { kind: "group" }, k.key, rangeMonths);
+      renderKpiChartGrid(document.getElementById("groupKpiChartGrid"), {
+        kpis: availableKpis, months: rangeMonths, seriesByKey, primaryKey: null,
+        actualLabel: formatDateOption(toDate), targetLabel: formatDateOption(fromDate),
+      });
+    }
+
+    renderPeriodRangePicker(document.getElementById("periodPicker"), {
+      months, defaultStart: defStart, defaultEnd: defEnd,
+      onChange: renderGroupKpiSection,
+    });
+    renderGroupKpiSection(defStart, defEnd);
+
+    // 会社別の変化ランキング: 直近の年間合計の売上高を新旧で比較し、変化が大きい会社ほど上位に表示する
+    // （「精度・変化のタイミング」を見るには、まずどの会社の見通が動いたかが分かる必要があるため）。
+    document.getElementById("rankMonthLabel").textContent = `(${periodLabel(period)})`;
+    const fromCompanies = companySummary(fromForecast);
+    const toCompanies = companySummary(toForecast);
+    const codes = new Set([...Object.keys(fromCompanies), ...Object.keys(toCompanies)]);
+    const rows = [...codes].map((code) => {
+      const fc = fromCompanies[code], tc = toCompanies[code];
+      const fromSales = fc ? companySalesForPeriod(fc, period, fromForecast.months) : null;
+      const toSales = tc ? companySalesForPeriod(tc, period, toForecast.months) : null;
+      const diff = fromSales == null || toSales == null ? null : toSales - fromSales;
+      return { code, name: (tc || fc)?.name || code, fromSales, toSales, diff };
+    }).sort((a, b) => Math.abs(b.diff ?? 0) - Math.abs(a.diff ?? 0));
+
+    document.getElementById("companyDiffTable").innerHTML = `
+      <table class="datatable">
+        <thead><tr><th>会社名</th><th class="num">${formatDateOption(fromDate)}時点</th><th class="num">${formatDateOption(toDate)}時点</th><th class="num">変化</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr>
+            <td>${r.name}</td>
+            <td class="num">${fmtYen(r.fromSales)}</td>
+            <td class="num">${fmtYen(r.toSales)}</td>
+            <td class="num ${r.diff > 0 ? "pos" : r.diff < 0 ? "neg" : ""}">${fmtDiffYen(r.diff)}</td>
+          </tr>`).join("") || `<tr><td colspan="4" class="empty-state">データがありません</td></tr>`}</tbody>
+      </table>
+    `;
+  }
+
+  renderDatePicker(document.getElementById("datePicker"), {
+    dates, defaultFrom: dates.at(-2), defaultTo: dates.at(-1),
+    onChange: render,
+  });
+
+  await render(dates.at(-2), dates.at(-1));
+
+  document.getElementById("content").style.display = "block";
+  document.getElementById("appRoot").style.display = "block";
+}
+
+main();
+</script>
+</body>
+</html>
