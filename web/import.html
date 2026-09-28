@@ -54,6 +54,7 @@
     </div>
     <div class="filelist" id="fileListForecast"></div>
     <p class="subtitle" id="forecastMasterStats" style="display:none;"></p>
+    <div id="forecastNameInconsistencies" class="guardrail" style="display:none;"></div>
     <div id="forecastGuardrail" class="guardrail" style="display:none;"></div>
     <div id="forecastPreview" style="display:none; margin-top:16px;">
       <div class="filterbar">
@@ -94,6 +95,7 @@
     </div>
     <div class="filelist" id="fileListTarget"></div>
     <p class="subtitle" id="targetMasterStats" style="display:none;"></p>
+    <div id="targetNameInconsistencies" class="guardrail" style="display:none;"></div>
     <div id="targetGuardrail" class="guardrail" style="display:none;"></div>
     <div id="targetPreview" style="display:none; margin-top:16px;">
       <div class="kpi-row" id="targetKpi"></div>
@@ -341,6 +343,32 @@ function renderProductMasterStats(elId, stats) {
   el.style.display = "block";
 }
 
+/**
+ * 1商材ブロック内で商材名列の値が途中で変わっている（＝全行コピー時の商材名上書き漏れの疑い）ケースを警告表示する。
+ * GMOペイメントゲートウェイ「その他の売上」／GMOグローバルサイン「CAサービス」の実例で発覚した事故と同種の
+ * 修正漏れを、今後も取り込み時に自動で拾えるようにするための表示（parseCompanySheet.mjsのnameInconsistencies）。
+ */
+function renderNameInconsistencies(elId, issues) {
+  const el = document.getElementById(elId);
+  if (!issues || issues.length === 0) {
+    el.style.display = "none";
+    return;
+  }
+  const items = issues
+    .map((issue) => {
+      const names = issue.names.map((n) => `「${n.name}」(${n.rows.length}行: ${n.rows.join(",")}行目)`).join(" → ");
+      return `<li>会社コード ${issue.companyCode}（${issue.companyName}）の商材ブロック（${issue.startRow}行目〜）: ${names}</li>`;
+    })
+    .join("");
+  el.innerHTML = `
+    <h4>⚠ 同じ商材ブロック内で商材名が変わっている箇所があります（${issues.length}件）</h4>
+    <p>1つの商材のはずが、行のコピー時に商材名列を上書きし忘れると、この後の集計で別々の商材として分裂してしまいます。
+    元のExcelファイルで該当行の商材名列を確認・修正してから、取り込みをやり直してください。</p>
+    <ul>${items}</ul>
+  `;
+  el.style.display = "block";
+}
+
 async function saveEncrypted(obj, filename) {
   const pass = await getPassphrase();
   const enc = await encryptJson(obj, pass);
@@ -398,6 +426,7 @@ async function importForecastEntries(entries) {
       document.getElementById("snapshotDateInput").value = todayIso();
       renderGuardrail("forecastGuardrail", guardrail, previousForecastCompanyCount, ["saveForecastBtn", "downloadForecastBtn"]);
       renderProductMasterStats("forecastMasterStats", merged.productMasterStats);
+      renderNameInconsistencies("forecastNameInconsistencies", merged.nameInconsistencies);
       renderForecastPreview();
     },
   });
@@ -641,6 +670,7 @@ async function importTargetEntries(entries) {
       mergedTarget = merged;
       renderGuardrail("targetGuardrail", guardrail, previousTargetCompanyCount, ["saveTargetBtn", "downloadTargetBtn"]);
       renderProductMasterStats("targetMasterStats", merged.productMasterStats);
+      renderNameInconsistencies("targetNameInconsistencies", merged.nameInconsistencies);
       renderTargetPreview();
     },
   });

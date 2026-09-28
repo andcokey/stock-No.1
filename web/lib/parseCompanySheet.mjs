@@ -161,6 +161,25 @@ export function parseCompanySheet(rows, productMaster = null) {
   const syntheticProductNoCounters = new Map();
   const productMasterStats = { matched: 0, unmatched: 0, unmatchedNames: [] };
 
+  // 1商材ブロック（集計用コードが1に戻る = 新しい商材の開始）の中で商材名列の値が途中で変わっている
+  // ケースを検出する。全行コピー時に前の商材名を上書きし忘れる事故が実際に起きたため（GMOペイメント
+  // ゲートウェイ「その他の売上」／GMOグローバルサイン「CAサービス」で発覚）、同種の修正漏れを
+  // 取り込み時に自動で拾えるようにするための検査。ブロック内で商材名が2種類以上出現したら記録する。
+  const nameInconsistencies = [];
+  let block = null; // { companyCode, startRow, names: Map<name, rows[]> }
+  let lastMetricCode = Infinity;
+
+  function flushBlock() {
+    if (block && block.names.size > 1) {
+      nameInconsistencies.push({
+        companyCode: block.companyCode,
+        startRow: block.startRow,
+        names: [...block.names.entries()].map(([name, rows]) => ({ name, rows })),
+      });
+    }
+    block = null;
+  }
+
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     if (!row) continue;
@@ -181,6 +200,18 @@ export function parseCompanySheet(rows, productMaster = null) {
     const productType = row[col.productType] || lastProductType;
     lastProductType = productType;
     if (productName == null) continue; // 商材番号も商材名も無ければ商材を特定できない
+
+    // 集計用コードが前の行以下に戻った（=1に戻った等）タイミングを新しい商材ブロックの開始とみなす。
+    const numericMetricCode = Number(metricCode);
+    if (Number.isFinite(numericMetricCode) && numericMetricCode <= lastMetricCode) {
+      flushBlock();
+      block = { companyCode, startRow: r, names: new Map() };
+    }
+    lastMetricCode = Number.isFinite(numericMetricCode) ? numericMetricCode : lastMetricCode;
+    if (block) {
+      if (!block.names.has(productName)) block.names.set(productName, []);
+      block.names.get(productName).push(r + 1); // 1始まりの行番号で記録（Excel上の表示行と合わせる）
+    }
 
     const legalName = typeof row[col.legalName] === "string" ? row[col.legalName].trim() : "";
     const company = ensureCompany(companyCode, legalName || null);
@@ -226,6 +257,7 @@ export function parseCompanySheet(rows, productMaster = null) {
       values: readMonthlyValues(row, months),
     };
   }
+  flushBlock();
 
   const companyCodes = Object.keys(companies);
   if (companyCodes.length === 1) {
@@ -238,6 +270,7 @@ export function parseCompanySheet(rows, productMaster = null) {
     companies,
     groupTotals: companyCodes.length === 1 ? null : preHeaderTotals,
     productMasterStats,
+    nameInconsistencies,
   };
 }
 
@@ -250,6 +283,7 @@ export function mergeParsed(parsedList) {
   const monthSet = new Set();
   const companies = {};
   const productMasterStats = { matched: 0, unmatched: 0, unmatchedNames: [] };
+  const nameInconsistencies = [];
   for (const parsed of parsedList) {
     for (const m of parsed.months) monthSet.add(m);
     for (const [code, company] of Object.entries(parsed.companies)) {
@@ -260,6 +294,10 @@ export function mergeParsed(parsedList) {
       productMasterStats.unmatched += parsed.productMasterStats.unmatched;
       productMasterStats.unmatchedNames.push(...parsed.productMasterStats.unmatchedNames);
     }
+    if (parsed.nameInconsistencies) nameInconsistencies.push(...parsed.nameInconsistencies);
   }
-  return { months: [...monthSet].sort(), companies, productMasterStats };
+  for (const issue of nameInconsistencies) {
+    issue.companyName = companies[issue.companyCode]?.name ?? issue.companyCode;
+  }
+  return { months: [...monthSet].sort(), companies, productMasterStats, nameInconsistencies };
 }
