@@ -41,7 +41,30 @@
 
       <div class="card" style="margin-bottom:16px;">
         <h2>会社別 売上高の変化（<span id="fromLabel2"></span> → <span id="toLabel2"></span>） <span class="n" id="rankMonthLabel"></span></h2>
+        <div class="subtitle" style="margin-bottom:8px;">会社名をクリックすると、その会社のKPI・商材別の変化を表示します。</div>
         <div class="table-scroll"><div id="companyDiffTable"></div></div>
+      </div>
+
+      <div class="card" id="companyDetailCard" style="margin-bottom:16px; display:none;">
+        <div class="kpi-section-head">
+          <h2 id="companyDetailTitle"></h2>
+          <div id="companyPeriodPicker"></div>
+        </div>
+        <div class="table-scroll"><div id="companyKpiTable"></div></div>
+        <div id="companyKpiChartGrid"></div>
+
+        <h3 style="font-size:13px; margin-top:18px;">商材別 売上高の変化 <span class="n" id="productRankMonthLabel"></span></h3>
+        <div class="subtitle" style="margin-bottom:8px;">商材名をクリックすると、その商材のKPI変化を表示します。</div>
+        <div class="table-scroll"><div id="productDiffTable"></div></div>
+      </div>
+
+      <div class="card" id="productDetailCard" style="margin-bottom:16px; display:none;">
+        <div class="kpi-section-head">
+          <h2 id="productDetailTitle"></h2>
+          <div id="productPeriodPicker"></div>
+        </div>
+        <div class="table-scroll"><div id="productKpiTable"></div></div>
+        <div id="productKpiChartGrid"></div>
       </div>
     </div>
   </div>
@@ -60,8 +83,8 @@
 <script type="module">
 import { listSnapshotDates, loadForecastAt } from "./assets/data-client.js";
 import {
-  companySummary, KPI_DEFS, groupKpiTable, kpiSeries,
-  periodMonths, periodLabel, groupTotalsForPeriod, companySalesForPeriod,
+  companySummary, KPI_DEFS, groupKpiTable, companyKpiTable, productKpiTable, kpiSeries,
+  periodMonths, periodLabel, groupTotalsForPeriod, companySalesForPeriod, productMetricSeries, METRIC,
 } from "./lib/aggregate.mjs";
 import {
   renderKpiTable, renderPeriodRangePicker, renderKpiChartGrid, kpiSeriesHasData, defaultPeriodRange,
@@ -219,7 +242,7 @@ async function main() {
       <table class="datatable">
         <thead><tr><th>会社名</th><th class="num">${formatDateOption(fromDate)}時点</th><th class="num">${formatDateOption(toDate)}時点</th><th class="num">変化</th></tr></thead>
         <tbody>${rows.map((r) => `
-          <tr>
+          <tr data-code="${r.code}" style="cursor:pointer;">
             <td>${r.name}</td>
             <td class="num">${fmtYen(r.fromSales)}</td>
             <td class="num">${fmtYen(r.toSales)}</td>
@@ -227,6 +250,134 @@ async function main() {
           </tr>`).join("") || `<tr><td colspan="4" class="empty-state">データがありません</td></tr>`}</tbody>
       </table>
     `;
+    document.querySelectorAll("#companyDiffTable tr[data-code]").forEach((el) => {
+      el.addEventListener("click", () => selectCompany(el.dataset.code));
+    });
+
+    document.getElementById("companyDetailCard").style.display = "none";
+    document.getElementById("productDetailCard").style.display = "none";
+
+    // 会社別ドリルダウン: 選んだ会社のKPI比較（companyKpiTable/kpiSeriesを同じ「旧=target/新=actual」流用で）と、
+    // 傘下商材の売上高変化一覧を表示する。商材一覧は新旧どちらかにしか存在しない商材（追加/削除）も含める。
+    function selectCompany(code) {
+      document.querySelectorAll("#companyDiffTable tr[data-code]").forEach((el) => el.classList.toggle("active-row", el.dataset.code === code));
+      document.getElementById("productDetailCard").style.display = "none";
+
+      const fromCompany = fromForecast.companies?.[code];
+      const toCompany = toForecast.companies?.[code];
+      const companyName = toCompanies[code]?.name || fromCompanies[code]?.name || code;
+      document.getElementById("companyDetailTitle").innerHTML =
+        `${companyName} のKPI比較（<span id="companyFromLabel"></span> → <span id="companyToLabel"></span>）`;
+      document.getElementById("companyFromLabel").textContent = formatDateOption(fromDate);
+      document.getElementById("companyToLabel").textContent = formatDateOption(toDate);
+
+      const scope = { kind: "company", companyCode: code };
+      const availableKpis = ALL_KPIS.filter((k) =>
+        kpiSeriesHasData(kpiSeries(toForecast, fromForecast, scope, k.key, months)));
+      const { start: cDefStart, end: cDefEnd } = defaultPeriodRange(months, boundaryMonth);
+
+      function renderCompanyKpiSection(start, end) {
+        const rangeMonths = months.filter((m) => m >= start && m <= end);
+        const endMonth = rangeMonths.at(-1) || months.at(-1);
+        const rows = companyKpiTable(toForecast, fromForecast, code, endMonth)
+          .filter((r) => availableKpis.some((k) => k.key === r.key));
+        renderKpiTable(document.getElementById("companyKpiTable"), rows, {
+          primaryKey: null,
+          headers: { target: formatDateOption(fromDate), actual: formatDateOption(toDate), diff: "変化" },
+          emptyText: "比較できるデータがありません",
+        });
+
+        const seriesByKey = {};
+        for (const k of availableKpis) seriesByKey[k.key] = kpiSeries(toForecast, fromForecast, scope, k.key, rangeMonths);
+        renderKpiChartGrid(document.getElementById("companyKpiChartGrid"), {
+          kpis: availableKpis, months: rangeMonths, seriesByKey, primaryKey: null,
+          actualLabel: formatDateOption(toDate), targetLabel: formatDateOption(fromDate),
+        });
+      }
+      renderPeriodRangePicker(document.getElementById("companyPeriodPicker"), {
+        months, defaultStart: cDefStart, defaultEnd: cDefEnd,
+        onChange: renderCompanyKpiSection,
+      });
+      renderCompanyKpiSection(cDefStart, cDefEnd);
+
+      document.getElementById("productRankMonthLabel").textContent = `(${periodLabel(period)})`;
+      const fromProducts = fromCompany ? Object.values(fromCompany.products) : [];
+      const toProducts = toCompany ? Object.values(toCompany.products) : [];
+      const productNos = new Set([...fromProducts.map((p) => p.productNo), ...toProducts.map((p) => p.productNo)]);
+      const productRows = [...productNos].map((no) => {
+        const fp = fromProducts.find((p) => p.productNo === no);
+        const tp = toProducts.find((p) => p.productNo === no);
+        const sumSales = (parsed, prod) => {
+          if (!prod) return null;
+          const values = productMetricSeries(parsed, code, no, METRIC.SALES, periodMonths(parsed.months, period));
+          const nums = values.filter((v) => v != null);
+          return nums.length ? nums.reduce((a, b) => a + b, 0) : null;
+        };
+        const fromSales = sumSales(fromForecast, fp);
+        const toSales = sumSales(toForecast, tp);
+        const diff = fromSales == null || toSales == null ? null : toSales - fromSales;
+        return { no, name: (tp || fp)?.name || `商材#${no}`, fromSales, toSales, diff };
+      }).sort((a, b) => Math.abs(b.diff ?? 0) - Math.abs(a.diff ?? 0));
+
+      document.getElementById("productDiffTable").innerHTML = `
+        <table class="datatable">
+          <thead><tr><th>商材名</th><th class="num">${formatDateOption(fromDate)}時点</th><th class="num">${formatDateOption(toDate)}時点</th><th class="num">変化</th></tr></thead>
+          <tbody>${productRows.map((r) => `
+            <tr data-no="${r.no}" style="cursor:pointer;">
+              <td>${r.name}</td>
+              <td class="num">${fmtYen(r.fromSales)}</td>
+              <td class="num">${fmtYen(r.toSales)}</td>
+              <td class="num ${r.diff > 0 ? "pos" : r.diff < 0 ? "neg" : ""}">${fmtDiffYen(r.diff)}</td>
+            </tr>`).join("") || `<tr><td colspan="4" class="empty-state">商材データがありません</td></tr>`}</tbody>
+        </table>
+      `;
+      document.querySelectorAll("#productDiffTable tr[data-no]").forEach((el) => {
+        el.addEventListener("click", () => selectProduct(code, Number(el.dataset.no), companyName, productRows));
+      });
+
+      document.getElementById("companyDetailCard").style.display = "block";
+    }
+
+    // 商材別ドリルダウン: productKpiTable/kpiSeriesを同じ流用パターンで、単一商材のKPI比較を表示する。
+    function selectProduct(code, productNo, companyName, productRows) {
+      document.querySelectorAll("#productDiffTable tr[data-no]").forEach((el) => el.classList.toggle("active-row", Number(el.dataset.no) === productNo));
+      const productName = productRows.find((r) => r.no === productNo)?.name || `商材#${productNo}`;
+      document.getElementById("productDetailTitle").innerHTML =
+        `${companyName} / ${productName} のKPI比較（<span id="productFromLabel"></span> → <span id="productToLabel"></span>）`;
+      document.getElementById("productFromLabel").textContent = formatDateOption(fromDate);
+      document.getElementById("productToLabel").textContent = formatDateOption(toDate);
+
+      const scope = { kind: "product", companyCode: code, productNo };
+      const availableKpis = ALL_KPIS.filter((k) =>
+        kpiSeriesHasData(kpiSeries(toForecast, fromForecast, scope, k.key, months)));
+      const { start: pDefStart, end: pDefEnd } = defaultPeriodRange(months, boundaryMonth);
+
+      function renderProductKpiSection(start, end) {
+        const rangeMonths = months.filter((m) => m >= start && m <= end);
+        const endMonth = rangeMonths.at(-1) || months.at(-1);
+        const rows = productKpiTable(toForecast, fromForecast, code, productNo, endMonth)
+          .filter((r) => availableKpis.some((k) => k.key === r.key));
+        renderKpiTable(document.getElementById("productKpiTable"), rows, {
+          primaryKey: null,
+          headers: { target: formatDateOption(fromDate), actual: formatDateOption(toDate), diff: "変化" },
+          emptyText: "比較できるデータがありません",
+        });
+
+        const seriesByKey = {};
+        for (const k of availableKpis) seriesByKey[k.key] = kpiSeries(toForecast, fromForecast, scope, k.key, rangeMonths);
+        renderKpiChartGrid(document.getElementById("productKpiChartGrid"), {
+          kpis: availableKpis, months: rangeMonths, seriesByKey, primaryKey: null,
+          actualLabel: formatDateOption(toDate), targetLabel: formatDateOption(fromDate),
+        });
+      }
+      renderPeriodRangePicker(document.getElementById("productPeriodPicker"), {
+        months, defaultStart: pDefStart, defaultEnd: pDefEnd,
+        onChange: renderProductKpiSection,
+      });
+      renderProductKpiSection(pDefStart, pDefEnd);
+
+      document.getElementById("productDetailCard").style.display = "block";
+    }
   }
 
   renderDatePicker(document.getElementById("datePicker"), {
